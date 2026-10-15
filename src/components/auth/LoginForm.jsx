@@ -10,7 +10,7 @@ export const LoginForm = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
 
@@ -19,7 +19,7 @@ export const LoginForm = () => {
       return;
     }
 
-    const res = login(email.trim(), password);
+    const res = await login(email.trim(), password);
     if (!res.success) {
       setError(res.error);
     }
