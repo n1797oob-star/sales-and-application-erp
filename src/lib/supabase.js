@@ -29,23 +29,76 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-// Helper: Sign up a new user in Supabase Auth + create profile row
-export const signUp = async (email, password, name = '', avatar = '', role = 'MANAGER') => {
-  if (!isSupabaseConfigured) return null;
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: { data: { full_name: name, avatar_url: avatar, role } },
-  });
-  if (error) throw error;
-  if (data?.user) {
-    try {
-      await supabase.from('profiles').upsert({ id: data.user.id, role, name, email, avatar });
-    } catch (e) {
-      console.warn('Profiles upsert skipped:', e);
-    }
+// Create user from Admin Panel without logging out the currently active Admin
+export const createAdminUser = async (email, password, name, role, extra = {}) => {
+  if (!isSupabaseConfigured) {
+    return { success: false, error: 'Supabase is not configured' };
   }
-  return data?.user;
+
+  try {
+    // Isolated client so Admin session is not replaced
+    const isolatedClient = createClient(rawUrl, rawKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    });
+
+    const { data, error } = await isolatedClient.auth.signUp({
+      email: email.trim(),
+      password: password.trim(),
+      options: {
+        data: {
+          full_name: name,
+          role: role,
+          avatar_url: extra.avatar || '',
+        },
+      },
+    });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    const userId = data?.user?.id;
+    if (!userId) {
+      return { success: false, error: 'No user ID returned from Supabase Auth' };
+    }
+
+    // Upsert into `profiles` table using main client
+    try {
+      const profilePayload = {
+        id: userId,
+        role: role || 'SALES_ENGINEER',
+        name: name || '',
+      };
+      await supabase.from('profiles').upsert(profilePayload);
+
+      // Attempt to save extended fields if columns exist in profiles
+      try {
+        await supabase
+          .from('profiles')
+          .update({
+            email: email.trim(),
+            avatar: extra.avatar || '',
+            department: extra.department || '',
+            territory: extra.territory || '',
+            status: extra.status || 'Active',
+            phone: extra.phone || '',
+          })
+          .eq('id', userId);
+      } catch (e) {
+        // Column might not exist in profiles table; safe to ignore
+      }
+    } catch (profileErr) {
+      console.warn('Profile upsert warning:', profileErr);
+    }
+
+    return { success: true, user: data.user, userId };
+  } catch (err) {
+    return { success: false, error: err.message || 'Failed to create user in Supabase' };
+  }
 };
 
 // Helper: Sign in

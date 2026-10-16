@@ -52,15 +52,27 @@ export const UserManagement = () => {
     }
   };
 
-  const handleAddSubmit = (e) => {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleAddSubmit = async (e) => {
     e.preventDefault();
     if (!formData.name || !formData.email) {
       alert('Please fill in name and email address.');
       return;
     }
-    addUser(formData);
-    setIsAddModalOpen(false);
-    resetForm();
+    setIsSubmitting(true);
+    try {
+      const res = await addUser(formData);
+      if (res && res.error) {
+        alert('Notice from Supabase: ' + res.error);
+      }
+      setIsAddModalOpen(false);
+      resetForm();
+    } catch (err) {
+      alert('Error creating user: ' + (err.message || err));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleEditSubmit = (e) => {
@@ -441,9 +453,10 @@ export const UserManagement = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-bold text-white bg-brand-600 hover:bg-brand-700 rounded-xl shadow-md"
+                  disabled={isSubmitting}
+                  className="px-5 py-2 text-xs font-bold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl shadow-md"
                 >
-                  {editingUser ? 'Save User & Photo' : 'Create User'}
+                  {isSubmitting ? 'Creating User in Supabase...' : editingUser ? 'Save User & Photo' : 'Create User'}
                 </button>
               </div>
             </form>

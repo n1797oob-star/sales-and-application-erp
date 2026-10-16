@@ -14,7 +14,7 @@ import {
   AVATAR_PRESETS,
 } from './seedData';
 import { ROLES, TASK_STATUSES } from '../types';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, createAdminUser } from '../lib/supabase';
 
 // Helper to push universal state to Supabase so all laptops see the exact same data
 const pushToCloud = async (state) => {
@@ -126,6 +126,42 @@ export const useAppStore = create(
       syncFromCloud: async () => {
         if (!isSupabaseConfigured) return;
         try {
+          // 1. Fetch profiles from Supabase so all laptops immediately see all users
+          const { data: profiles, error: pError } = await supabase.from('profiles').select('*');
+          if (!pError && Array.isArray(profiles) && profiles.length > 0) {
+            set((state) => {
+              const updatedUsers = [...state.users];
+              profiles.forEach((p) => {
+                const existingIndex = updatedUsers.findIndex(
+                  (u) => u.id === p.id || (p.email && u.email?.toLowerCase() === p.email?.toLowerCase())
+                );
+                if (existingIndex >= 0) {
+                  updatedUsers[existingIndex] = {
+                    ...updatedUsers[existingIndex],
+                    ...p,
+                    name: p.name || updatedUsers[existingIndex].name,
+                    role: p.role || updatedUsers[existingIndex].role,
+                  };
+                } else {
+                  updatedUsers.push({
+                    id: p.id,
+                    name: p.name || 'User',
+                    email: p.email || '',
+                    role: p.role || ROLES.SALES_ENGINEER,
+                    avatar: p.avatar || AVATAR_PRESETS.Male[0],
+                    gender: p.gender || 'Male',
+                    department: p.department || 'Sales & App Engineering',
+                    territory: p.territory || 'Pan-India',
+                    status: p.status || 'Active',
+                    password: 'password123',
+                  });
+                }
+              });
+              return { users: updatedUsers };
+            });
+          }
+
+          // 2. Fetch shared ERP state if erp_shared_data table is created
           const { data, error } = await supabase
             .from('erp_shared_data')
             .select('data')
@@ -135,7 +171,6 @@ export const useAppStore = create(
           if (!error && data?.data) {
             const cloud = data.data;
             set((state) => ({
-              users: cloud.users?.length ? cloud.users : state.users,
               customers: cloud.customers !== undefined ? cloud.customers : state.customers,
               products: cloud.products !== undefined ? cloud.products : state.products,
               visits: cloud.visits !== undefined ? cloud.visits : state.visits,
@@ -311,8 +346,40 @@ export const useAppStore = create(
 
       // Actions - Admin User Management (CRUD)
       addUser: async (userData) => {
+        let supabaseUserId = null;
+        let cloudError = null;
+
+        // Register user in Supabase Auth & profiles table without logging out admin
+        if (isSupabaseConfigured && userData.email && userData.password) {
+          try {
+            const cloudRes = await createAdminUser(
+              userData.email,
+              userData.password,
+              userData.name,
+              userData.role,
+              {
+                avatar: userData.avatar,
+                department: userData.department,
+                territory: userData.territory,
+                status: userData.status,
+                phone: userData.phone,
+              }
+            );
+
+            if (cloudRes.success) {
+              supabaseUserId = cloudRes.userId;
+            } else {
+              cloudError = cloudRes.error;
+              console.warn('Supabase create user error:', cloudRes.error);
+            }
+          } catch (e) {
+            cloudError = e.message;
+            console.warn('Cloud user register error:', e);
+          }
+        }
+
         const newUser = {
-          id: `u-${Date.now()}`,
+          id: supabaseUserId || `u-${Date.now()}`,
           password: userData.password || 'password123',
           avatar: userData.avatar || AVATAR_PRESETS.Male[0],
           status: 'Active',
@@ -332,41 +399,12 @@ export const useAppStore = create(
         };
 
         set((state) => ({
-          users: [newUser, ...state.users],
+          users: [newUser, ...state.users.filter((u) => u.email.toLowerCase() !== newUser.email.toLowerCase())],
           activityLogs: [newLog, ...state.activityLogs],
         }));
 
-        // Also register in Supabase Auth if configured
-        if (isSupabaseConfigured && userData.email && userData.password) {
-          try {
-            await supabase.auth.signUp({
-              email: userData.email,
-              password: userData.password,
-              options: {
-                data: {
-                  full_name: userData.name,
-                  role: userData.role,
-                  avatar_url: userData.avatar,
-                },
-              },
-            });
-            await supabase.from('profiles').upsert({
-              id: newUser.id,
-              name: newUser.name,
-              email: newUser.email,
-              role: newUser.role,
-              avatar: newUser.avatar,
-              department: newUser.department,
-              territory: newUser.territory,
-              status: newUser.status,
-            });
-          } catch (e) {
-            console.debug('Cloud user register notice:', e);
-          }
-        }
-
         pushToCloud(get());
-        return newUser;
+        return { success: !cloudError, user: newUser, error: cloudError };
       },
 
       updateUser: (id, updatedFields) => {
