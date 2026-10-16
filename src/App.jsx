@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { ROLES } from './types';
 import { LoginForm } from './components/auth/LoginForm';
@@ -22,8 +22,12 @@ import { ProductMaster } from './components/masters/ProductMaster';
 import { ReportsCenter } from './components/reports/ReportsCenter';
 
 export function App() {
-  const { activeTab, currentUser, isAuthenticated } = useAppStore();
+  const { activeTab, currentUser, isAuthenticated, initApp } = useAppStore();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    if (initApp) initApp();
+  }, [initApp]);
 
   // Global Modals State
   const [isVisitModalOpen, setIsVisitModalOpen] = useState(false);

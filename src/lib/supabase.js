@@ -1,23 +1,29 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Vite exposes env variables with VITE_ prefix
-const supabaseUrl =
+const rawUrl =
   import.meta.env.VITE_SUPABASE_URL ||
-  import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
+  import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
+  '';
 
-const supabaseAnonKey =
+const rawKey =
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  '';
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error(
-    '❌ Supabase env vars missing. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env and Vercel settings.'
-  );
-}
+export const isSupabaseConfigured = Boolean(
+  rawUrl &&
+  rawKey &&
+  rawUrl.startsWith('http') &&
+  !rawUrl.includes('placeholder')
+);
+
+// Fallback dummy client so createClient never throws on startup
+const supabaseUrl = isSupabaseConfigured ? rawUrl : 'https://dummy-app-placeholder.supabase.co';
+const supabaseAnonKey = isSupabaseConfigured ? rawKey : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    // Persist session in localStorage so users stay logged in across refreshes
     persistSession: true,
     autoRefreshToken: true,
   },
@@ -25,20 +31,26 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 
 // Helper: Sign up a new user in Supabase Auth + create profile row
 export const signUp = async (email, password, name = '', avatar = '', role = 'MANAGER') => {
+  if (!isSupabaseConfigured) return null;
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { full_name: name, avatar_url: avatar } },
+    options: { data: { full_name: name, avatar_url: avatar, role } },
   });
   if (error) throw error;
-  if (data.user) {
-    await supabase.from('profiles').upsert({ id: data.user.id, role });
+  if (data?.user) {
+    try {
+      await supabase.from('profiles').upsert({ id: data.user.id, role, name, email, avatar });
+    } catch (e) {
+      console.warn('Profiles upsert skipped:', e);
+    }
   }
-  return data.user;
+  return data?.user;
 };
 
 // Helper: Sign in
 export const signIn = async (email, password) => {
+  if (!isSupabaseConfigured) throw new Error('Supabase not configured');
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
   return data;
@@ -46,6 +58,10 @@ export const signIn = async (email, password) => {
 
 // Helper: Sign out
 export const signOut = async () => {
-  const { error } = await supabase.auth.signOut();
-  if (error) throw error;
+  if (!isSupabaseConfigured) return;
+  try {
+    await supabase.auth.signOut();
+  } catch (e) {
+    console.warn('Supabase signOut error:', e);
+  }
 };

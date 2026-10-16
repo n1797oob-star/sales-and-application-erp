@@ -86,8 +86,9 @@ export const isWithinDatePreset = (dateStr, datePreset, startDate, endDate) => {
 };
 
 // Filter Visits with deep search (customer name, product name/model, engineer name)
-export const filterVisits = (visits, filters, currentUser = null, customers = [], products = [], users = []) => {
+export const filterVisits = (visits, filters = {}, currentUser = null, customers = [], products = [], users = []) => {
   if (!Array.isArray(visits)) return [];
+  filters = filters || {};
   return visits.filter((v) => {
     // Sales Engineer restricted to own visits
     if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && v.salesEngineerId !== currentUser.id) {
@@ -129,8 +130,9 @@ export const filterVisits = (visits, filters, currentUser = null, customers = []
 };
 
 // Filter Office Works with deep search
-export const filterOfficeWorks = (works, filters, currentUser = null, customers = [], users = []) => {
+export const filterOfficeWorks = (works, filters = {}, currentUser = null, customers = [], users = []) => {
   if (!Array.isArray(works)) return [];
+  filters = filters || {};
   return works.filter((w) => {
     if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && w.salesEngineerId !== currentUser.id) {
       return false;
@@ -160,8 +162,9 @@ export const filterOfficeWorks = (works, filters, currentUser = null, customers 
 };
 
 // Filter KRA Activities with deep search
-export const filterKras = (kras, filters, currentUser = null, customers = [], products = [], users = []) => {
+export const filterKras = (kras, filters = {}, currentUser = null, customers = [], products = [], users = []) => {
   if (!Array.isArray(kras)) return [];
+  filters = filters || {};
   return kras.filter((k) => {
     if (currentUser && currentUser.role === ROLES.APPLICATION_ENGINEER && k.appEngineerId !== currentUser.id) {
       return false;
@@ -204,8 +207,9 @@ export const filterKras = (kras, filters, currentUser = null, customers = [], pr
 };
 
 // Filter Tasks with deep search
-export const filterTasks = (tasks, filters, currentUser = null, users = []) => {
+export const filterTasks = (tasks, filters = {}, currentUser = null, users = []) => {
   if (!Array.isArray(tasks)) return [];
+  filters = filters || {};
   return tasks.filter((t) => {
     if (currentUser && currentUser.role !== ROLES.ADMIN && currentUser.role !== ROLES.MANAGER) {
       if (t.assignedToId !== currentUser.id && t.assignedById !== currentUser.id) {
@@ -239,8 +243,9 @@ export const filterTasks = (tasks, filters, currentUser = null, users = []) => {
 };
 
 // Filter PO Order Bookings
-export const filterOrders = (orders, filters, currentUser = null, customers = [], products = [], users = []) => {
+export const filterOrders = (orders, filters = {}, currentUser = null, customers = [], products = [], users = []) => {
   if (!Array.isArray(orders)) return [];
+  filters = filters || {};
   return orders.filter((o) => {
     if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && o.salesEngineerId !== currentUser.id) {
       return false;
