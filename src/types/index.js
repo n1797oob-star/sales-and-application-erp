@@ -6,6 +6,17 @@ export const ROLES = {
   APPLICATION_ENGINEER: 'Application Engineer',
 };
 
+// Robust helper to normalize role strings regardless of casing (e.g. 'APPLICATION_ENGINEER', 'sales_engineer', 'admin')
+export const normalizeRole = (role) => {
+  if (!role) return ROLES.APPLICATION_ENGINEER;
+  const clean = String(role).trim().toLowerCase().replace(/[-_]/g, ' ');
+  if (clean.includes('admin')) return ROLES.ADMIN;
+  if (clean.includes('manager')) return ROLES.MANAGER;
+  if (clean.includes('app')) return ROLES.APPLICATION_ENGINEER;
+  if (clean.includes('sale')) return ROLES.SALES_ENGINEER;
+  return role;
+};
+
 // Lead Stages
 export const LEAD_STAGES = [
   'Prospecting',

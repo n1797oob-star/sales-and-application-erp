@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppStore } from './store/useAppStore';
-import { ROLES } from './types';
+import { ROLES, normalizeRole } from './types';
 import { LoginForm } from './components/auth/LoginForm';
 import { Navbar } from './components/common/Navbar';
 import { Sidebar } from './components/common/Sidebar';
@@ -42,9 +42,10 @@ export function App() {
 
   // View Renderer
   const renderView = () => {
+    const role = normalizeRole(currentUser?.role);
     switch (activeTab) {
       case 'dashboard':
-        if (currentUser.role === ROLES.SALES_ENGINEER) {
+        if (role === ROLES.SALES_ENGINEER) {
           return (
             <SalesEngineerDashboard
               onOpenVisitModal={() => setIsVisitModalOpen(true)}
@@ -53,7 +54,7 @@ export function App() {
             />
           );
         }
-        if (currentUser.role === ROLES.APPLICATION_ENGINEER) {
+        if (role === ROLES.APPLICATION_ENGINEER) {
           return <AppEngineerDashboard onOpenKraModal={() => setIsKraModalOpen(true)} />;
         }
         return <ManagerDashboard />;

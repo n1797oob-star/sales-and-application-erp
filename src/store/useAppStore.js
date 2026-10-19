@@ -13,7 +13,7 @@ import {
   INITIAL_ACTIVITY_LOGS,
   AVATAR_PRESETS,
 } from './seedData';
-import { ROLES, TASK_STATUSES } from '../types';
+import { ROLES, TASK_STATUSES, normalizeRole } from '../types';
 import { supabase, isSupabaseConfigured, createAdminUser } from '../lib/supabase';
 
 // Helper to safely merge arrays by ID without losing records created across multiple devices
@@ -211,14 +211,16 @@ export const useAppStore = create(
             let matchedUser = get().users.find((u) => u.email?.toLowerCase() === email);
 
             // NEVER default an arbitrary non-admin user to ROLES.ADMIN!
-            let resolvedRole =
+            let rawRole =
               metaRole ||
-              (matchedUser?.role && matchedUser.role !== ROLES.ADMIN ? matchedUser.role : null) ||
+              (matchedUser?.role && normalizeRole(matchedUser.role) !== ROLES.ADMIN ? matchedUser.role : null) ||
               (email === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
 
-            if (email !== 'admin@tmi-erp.com' && resolvedRole === ROLES.ADMIN) {
-              resolvedRole = metaRole || ROLES.APPLICATION_ENGINEER;
+            if (email !== 'admin@tmi-erp.com' && normalizeRole(rawRole) === ROLES.ADMIN) {
+              rawRole = metaRole || ROLES.APPLICATION_ENGINEER;
             }
+
+            const resolvedRole = normalizeRole(rawRole);
 
             const defaultDept =
               resolvedRole === ROLES.APPLICATION_ENGINEER
@@ -262,14 +264,16 @@ export const useAppStore = create(
 
               let matchedUser = get().users.find((u) => u.email?.toLowerCase() === email);
 
-              let resolvedRole =
+              let rawRole =
                 metaRole ||
-                (matchedUser?.role && matchedUser.role !== ROLES.ADMIN ? matchedUser.role : null) ||
+                (matchedUser?.role && normalizeRole(matchedUser.role) !== ROLES.ADMIN ? matchedUser.role : null) ||
                 (email === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
 
-              if (email !== 'admin@tmi-erp.com' && resolvedRole === ROLES.ADMIN) {
-                resolvedRole = metaRole || ROLES.APPLICATION_ENGINEER;
+              if (email !== 'admin@tmi-erp.com' && normalizeRole(rawRole) === ROLES.ADMIN) {
+                rawRole = metaRole || ROLES.APPLICATION_ENGINEER;
               }
+
+              const resolvedRole = normalizeRole(rawRole);
 
               const defaultDept =
                 resolvedRole === ROLES.APPLICATION_ENGINEER
@@ -433,16 +437,18 @@ export const useAppStore = create(
               let existingUser = get().users.find((u) => u.email?.toLowerCase() === cleanEmail);
 
               // Accurately determine role - NEVER default an engineer to Admin!
-              let resolvedRole =
+              let rawRole =
                 profile?.role ||
                 metaRole ||
-                (existingUser?.role && existingUser.role !== ROLES.ADMIN ? existingUser.role : null) ||
+                (existingUser?.role && normalizeRole(existingUser.role) !== ROLES.ADMIN ? existingUser.role : null) ||
                 (cleanEmail === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
 
               // If cleanEmail is NOT admin@tmi-erp.com and was mistakenly saved as ADMIN, repair it
-              if (cleanEmail !== 'admin@tmi-erp.com' && resolvedRole === ROLES.ADMIN) {
-                resolvedRole = metaRole || ROLES.APPLICATION_ENGINEER;
+              if (cleanEmail !== 'admin@tmi-erp.com' && normalizeRole(rawRole) === ROLES.ADMIN) {
+                rawRole = metaRole || ROLES.APPLICATION_ENGINEER;
               }
+
+              const resolvedRole = normalizeRole(rawRole);
 
               const defaultDept =
                 resolvedRole === ROLES.APPLICATION_ENGINEER
@@ -498,13 +504,15 @@ export const useAppStore = create(
 
         if (found) {
           // If non-admin user was previously corrupted into ADMIN, repair it
-          if (found.email.toLowerCase() !== 'admin@tmi-erp.com' && found.role === ROLES.ADMIN) {
-            found = { ...found, role: ROLES.APPLICATION_ENGINEER };
+          let role = normalizeRole(found.role);
+          if (found.email.toLowerCase() !== 'admin@tmi-erp.com' && role === ROLES.ADMIN) {
+            role = ROLES.APPLICATION_ENGINEER;
           }
+          found = { ...found, role };
 
           let defaultTab = 'dashboard';
-          if (found.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
-          if (found.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
+          if (role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
+          if (role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
 
           set({ currentUser: found, isAuthenticated: true, activeTab: defaultTab });
           get().syncFromCloud();

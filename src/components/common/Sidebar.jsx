@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { ROLES } from '../../types';
+import { ROLES, normalizeRole } from '../../types';
 import {
   LayoutDashboard,
   MapPin,
@@ -87,7 +87,18 @@ export const Sidebar = ({ isOpen, onClose }) => {
     },
   ];
 
-  const visibleItems = navItems.filter((item) => item.roles.includes(currentUser?.role));
+  const userRole = normalizeRole(currentUser?.role);
+
+  let visibleItems = navItems.filter((item) => {
+    // Admin has access to all modules
+    if (userRole === ROLES.ADMIN) return true;
+    return item.roles.some((r) => normalizeRole(r) === userRole);
+  });
+
+  // Bulletproof fallback so navigation NEVER goes blank
+  if (!visibleItems || visibleItems.length === 0) {
+    visibleItems = navItems;
+  }
 
   return (
     <>

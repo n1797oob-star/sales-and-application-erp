@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { ROLES } from '../../types';
+import { ROLES, normalizeRole } from '../../types';
 import {
   LayoutDashboard,
   MapPin,
@@ -11,10 +11,11 @@ import {
 
 export const BottomNav = ({ onOpenSidebar }) => {
   const { activeTab, setActiveTab, currentUser } = useAppStore();
+  const role = normalizeRole(currentUser?.role);
 
   const getDashboardId = () => {
-    if (currentUser.role === ROLES.SALES_ENGINEER) return 'dashboard_se';
-    if (currentUser.role === ROLES.APPLICATION_ENGINEER) return 'dashboard_ae';
+    if (role === ROLES.SALES_ENGINEER) return 'dashboard_se';
+    if (role === ROLES.APPLICATION_ENGINEER) return 'dashboard_ae';
     return 'dashboard';
   };
 
