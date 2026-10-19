@@ -16,24 +16,85 @@ import {
 import { ROLES, TASK_STATUSES } from '../types';
 import { supabase, isSupabaseConfigured, createAdminUser } from '../lib/supabase';
 
-// Helper to push universal state to Supabase so all laptops see the exact same data
+// Helper to safely merge arrays by ID without losing records created across multiple devices
+const mergeById = (cloudArr = [], localArr = []) => {
+  const map = new Map();
+  (cloudArr || []).forEach((item) => {
+    if (item && item.id) map.set(item.id, item);
+  });
+  (localArr || []).forEach((item) => {
+    if (item && item.id) {
+      const existing = map.get(item.id);
+      map.set(item.id, existing ? { ...existing, ...item } : item);
+    }
+  });
+  return Array.from(map.values());
+};
+
+// Push universal state to Supabase so all laptops see the exact same data without overwriting each other
 const pushToCloud = async (state) => {
   if (!isSupabaseConfigured) return;
   try {
+    // 1. Fetch latest cloud state first to safely merge
+    const { data: cloudRow, error: fetchErr } = await supabase
+      .from('erp_shared_data')
+      .select('data')
+      .eq('id', 'global_data')
+      .single();
+
+    if (fetchErr && (fetchErr.code === '42P01' || fetchErr.message?.includes('relation "erp_shared_data" does not exist'))) {
+      console.warn('⚠️ Supabase table "erp_shared_data" does not exist yet. Please run supabase_setup.sql in your Supabase SQL editor.');
+      useAppStore.setState({ cloudSyncStatus: 'table_missing' });
+      return;
+    }
+
+    const cloudData = cloudRow?.data || {};
+
+    // 2. Merge cloud and local data safely
+    const mergedKraActivities = mergeById(cloudData.kraActivities, state.kraActivities);
+    const mergedVisits = mergeById(cloudData.visits, state.visits);
+    const mergedOfficeWorks = mergeById(cloudData.officeWorks, state.officeWorks);
+    const mergedTasks = mergeById(cloudData.tasks, state.tasks);
+    const mergedOrders = mergeById(cloudData.orders, state.orders);
+    const mergedCustomers = mergeById(cloudData.customers, state.customers);
+    const mergedProducts = mergeById(cloudData.products, state.products);
+    const mergedUsers = mergeById(cloudData.users, state.users);
+
     const payload = {
-      users: state.users,
-      customers: state.customers,
-      products: state.products,
-      visits: state.visits,
-      officeWorks: state.officeWorks,
-      kraActivities: state.kraActivities,
-      tasks: state.tasks,
-      orders: state.orders,
+      users: mergedUsers,
+      customers: mergedCustomers,
+      products: mergedProducts,
+      visits: mergedVisits,
+      officeWorks: mergedOfficeWorks,
+      kraActivities: mergedKraActivities,
+      tasks: mergedTasks,
+      orders: mergedOrders,
       updated_at: new Date().toISOString(),
     };
-    await supabase.from('erp_shared_data').upsert({ id: 'global_data', data: payload });
+
+    const { error: upsertErr } = await supabase
+      .from('erp_shared_data')
+      .upsert({ id: 'global_data', data: payload });
+
+    if (upsertErr) {
+      console.warn('Cloud sync push notice:', upsertErr.message);
+      useAppStore.setState({ cloudSyncStatus: 'error', cloudSyncError: upsertErr.message });
+    } else {
+      useAppStore.setState({
+        cloudSyncStatus: 'connected',
+        cloudSyncError: null,
+        lastCloudSyncTime: new Date().toISOString(),
+        kraActivities: mergedKraActivities,
+        visits: mergedVisits,
+        officeWorks: mergedOfficeWorks,
+        tasks: mergedTasks,
+        orders: mergedOrders,
+        customers: mergedCustomers,
+        products: mergedProducts,
+        users: mergedUsers,
+      });
+    }
   } catch (err) {
-    // Silently continue if cloud table is not set up yet
     console.debug('Cloud sync notice:', err);
   }
 };
@@ -44,6 +105,13 @@ export const useAppStore = create(
       // Authentication State
       isAuthenticated: false,
       currentUser: null,
+
+      // Cloud Synchronization State
+      cloudSyncStatus: isSupabaseConfigured ? 'connected' : 'offline',
+      cloudSyncError: null,
+      lastCloudSyncTime: null,
+      isCloudSetupModalOpen: false,
+      setCloudSetupModalOpen: (open) => set({ isCloudSetupModalOpen: open }),
 
       // Master Collections
       users: INITIAL_USERS,
@@ -83,38 +151,158 @@ export const useAppStore = create(
         if (!isSupabaseConfigured) return;
 
         try {
-          // 1. Pull cloud data if available
+          // 1. Pull latest cloud data
           await get().syncFromCloud();
 
-          // 2. Check Supabase auth session
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session?.user && !get().isAuthenticated) {
-            const email = session.user.email;
-            let matchedUser = get().users.find((u) => u.email.toLowerCase() === email?.toLowerCase());
-            if (!matchedUser) {
-              matchedUser = {
-                id: session.user.id,
-                name: session.user.user_metadata?.full_name || email?.split('@')[0] || 'User',
-                email: email,
-                role: session.user.user_metadata?.role || ROLES.ADMIN,
-                avatar: session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
-                gender: 'Male',
-                department: 'Executive Board',
-                territory: 'Pan-India',
-                status: 'Active',
-              };
+          // 2. Real-time subscription to erp_shared_data table
+          if (typeof window !== 'undefined' && !window._erpRealtimeSubscribed) {
+            window._erpRealtimeSubscribed = true;
+            try {
+              supabase
+                .channel('realtime_erp_shared_data')
+                .on(
+                  'postgres_changes',
+                  { event: '*', schema: 'public', table: 'erp_shared_data' },
+                  (payload) => {
+                    if (payload?.new?.data) {
+                      const cloud = payload.new.data;
+                      set((state) => ({
+                        users: mergeById(cloud.users, state.users),
+                        customers: mergeById(cloud.customers, state.customers),
+                        products: mergeById(cloud.products, state.products),
+                        visits: mergeById(cloud.visits, state.visits),
+                        officeWorks: mergeById(cloud.officeWorks, state.officeWorks),
+                        kraActivities: mergeById(cloud.kraActivities, state.kraActivities),
+                        tasks: mergeById(cloud.tasks, state.tasks),
+                        orders: mergeById(cloud.orders, state.orders),
+                        cloudSyncStatus: 'connected',
+                        cloudSyncError: null,
+                        lastCloudSyncTime: new Date().toISOString(),
+                      }));
+                    }
+                  }
+                )
+                .subscribe();
+            } catch (subErr) {
+              console.debug('Realtime subscribe notice:', subErr);
             }
-            set({ currentUser: matchedUser, isAuthenticated: true });
           }
 
-          // 3. Listen for auth changes
-          supabase.auth.onAuthStateChange(async (_event, session) => {
+          // 3. Heartbeat polling every 15s + on window focus
+          if (typeof window !== 'undefined' && !window._erpHearbeatActive) {
+            window._erpHearbeatActive = true;
+            setInterval(() => {
+              get().syncFromCloud();
+            }, 15000);
+
+            window.addEventListener('focus', () => {
+              get().syncFromCloud();
+            });
+          }
+
+          // 4. Check Supabase auth session
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user) {
+            const email = (session.user.email || '').toLowerCase();
+            const metaRole = session.user.user_metadata?.role;
+            const metaName = session.user.user_metadata?.full_name;
+            const metaDept = session.user.user_metadata?.department;
+
+            let matchedUser = get().users.find((u) => u.email?.toLowerCase() === email);
+
+            // NEVER default an arbitrary non-admin user to ROLES.ADMIN!
+            let resolvedRole =
+              metaRole ||
+              (matchedUser?.role && matchedUser.role !== ROLES.ADMIN ? matchedUser.role : null) ||
+              (email === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
+
+            if (email !== 'admin@tmi-erp.com' && resolvedRole === ROLES.ADMIN) {
+              resolvedRole = metaRole || ROLES.APPLICATION_ENGINEER;
+            }
+
+            const defaultDept =
+              resolvedRole === ROLES.APPLICATION_ENGINEER
+                ? 'Application Engineering'
+                : resolvedRole === ROLES.SALES_ENGINEER
+                ? 'Sales & Marketing'
+                : 'Executive Board';
+
+            const userObj = {
+              id: session.user.id,
+              name: matchedUser?.name || metaName || email.split('@')[0],
+              email: email,
+              role: resolvedRole,
+              avatar: matchedUser?.avatar || session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
+              gender: matchedUser?.gender || session.user.user_metadata?.gender || 'Male',
+              department: matchedUser?.department || metaDept || defaultDept,
+              territory: matchedUser?.territory || session.user.user_metadata?.territory || 'Pan-India',
+              phone: matchedUser?.phone || session.user.user_metadata?.phone || '',
+              status: 'Active',
+            };
+
+            let defaultTab = 'dashboard';
+            if (userObj.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
+            if (userObj.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
+
+            set((state) => ({
+              currentUser: userObj,
+              isAuthenticated: true,
+              activeTab: state.activeTab === 'dashboard' ? defaultTab : state.activeTab,
+              users: [userObj, ...state.users.filter((u) => u.email?.toLowerCase() !== email && u.id !== userObj.id)],
+            }));
+          }
+
+          // 5. Auth state change listener
+          supabase.auth.onAuthStateChange(async (event, session) => {
             if (session?.user) {
-              const email = session.user.email;
-              const matchedUser = get().users.find((u) => u.email.toLowerCase() === email?.toLowerCase());
-              if (matchedUser) {
-                set({ currentUser: matchedUser, isAuthenticated: true });
+              const email = (session.user.email || '').toLowerCase();
+              const metaRole = session.user.user_metadata?.role;
+              const metaName = session.user.user_metadata?.full_name;
+              const metaDept = session.user.user_metadata?.department;
+
+              let matchedUser = get().users.find((u) => u.email?.toLowerCase() === email);
+
+              let resolvedRole =
+                metaRole ||
+                (matchedUser?.role && matchedUser.role !== ROLES.ADMIN ? matchedUser.role : null) ||
+                (email === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
+
+              if (email !== 'admin@tmi-erp.com' && resolvedRole === ROLES.ADMIN) {
+                resolvedRole = metaRole || ROLES.APPLICATION_ENGINEER;
               }
+
+              const defaultDept =
+                resolvedRole === ROLES.APPLICATION_ENGINEER
+                  ? 'Application Engineering'
+                  : resolvedRole === ROLES.SALES_ENGINEER
+                  ? 'Sales & Marketing'
+                  : 'Executive Board';
+
+              const userObj = {
+                id: session.user.id,
+                name: matchedUser?.name || metaName || email.split('@')[0],
+                email: email,
+                role: resolvedRole,
+                avatar: matchedUser?.avatar || session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
+                gender: matchedUser?.gender || session.user.user_metadata?.gender || 'Male',
+                department: matchedUser?.department || metaDept || defaultDept,
+                territory: matchedUser?.territory || session.user.user_metadata?.territory || 'Pan-India',
+                phone: matchedUser?.phone || session.user.user_metadata?.phone || '',
+                status: 'Active',
+              };
+
+              let defaultTab = 'dashboard';
+              if (userObj.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
+              if (userObj.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
+
+              set((state) => ({
+                currentUser: userObj,
+                isAuthenticated: true,
+                activeTab: state.activeTab === 'dashboard' ? defaultTab : state.activeTab,
+                users: [userObj, ...state.users.filter((u) => u.email?.toLowerCase() !== email && u.id !== userObj.id)],
+              }));
+            } else if (event === 'SIGNED_OUT') {
+              set({ currentUser: null, isAuthenticated: false, activeTab: 'dashboard' });
             }
           });
         } catch (err) {
@@ -126,7 +314,7 @@ export const useAppStore = create(
       syncFromCloud: async () => {
         if (!isSupabaseConfigured) return;
         try {
-          // 1. Fetch profiles from Supabase so all laptops immediately see all users
+          // 1. Fetch profiles from Supabase if table exists
           const { data: profiles, error: pError } = await supabase.from('profiles').select('*');
           if (!pError && Array.isArray(profiles) && profiles.length > 0) {
             set((state) => {
@@ -147,10 +335,10 @@ export const useAppStore = create(
                     id: p.id,
                     name: p.name || 'User',
                     email: p.email || '',
-                    role: p.role || ROLES.SALES_ENGINEER,
+                    role: p.role || ROLES.APPLICATION_ENGINEER,
                     avatar: p.avatar || AVATAR_PRESETS.Male[0],
                     gender: p.gender || 'Male',
-                    department: p.department || 'Sales & App Engineering',
+                    department: p.department || (p.role === ROLES.APPLICATION_ENGINEER ? 'Application Engineering' : 'Sales Engineering'),
                     territory: p.territory || 'Pan-India',
                     status: p.status || 'Active',
                     password: 'password123',
@@ -161,28 +349,48 @@ export const useAppStore = create(
             });
           }
 
-          // 2. Fetch shared ERP state if erp_shared_data table is created
+          // 2. Fetch shared ERP state from erp_shared_data table
           const { data, error } = await supabase
             .from('erp_shared_data')
             .select('data')
             .eq('id', 'global_data')
             .single();
 
-          if (!error && data?.data) {
+          if (error) {
+            if (error.code === '42P01' || error.message?.includes('relation "erp_shared_data" does not exist')) {
+              set({ cloudSyncStatus: 'table_missing' });
+            } else {
+              set({ cloudSyncStatus: 'error', cloudSyncError: error.message });
+            }
+            return;
+          }
+
+          if (data?.data) {
             const cloud = data.data;
             set((state) => ({
-              customers: cloud.customers !== undefined ? cloud.customers : state.customers,
-              products: cloud.products !== undefined ? cloud.products : state.products,
-              visits: cloud.visits !== undefined ? cloud.visits : state.visits,
-              officeWorks: cloud.officeWorks !== undefined ? cloud.officeWorks : state.officeWorks,
-              kraActivities: cloud.kraActivities !== undefined ? cloud.kraActivities : state.kraActivities,
-              tasks: cloud.tasks !== undefined ? cloud.tasks : state.tasks,
-              orders: cloud.orders !== undefined ? cloud.orders : state.orders,
+              users: mergeById(cloud.users, state.users),
+              customers: mergeById(cloud.customers, state.customers),
+              products: mergeById(cloud.products, state.products),
+              visits: mergeById(cloud.visits, state.visits),
+              officeWorks: mergeById(cloud.officeWorks, state.officeWorks),
+              kraActivities: mergeById(cloud.kraActivities, state.kraActivities),
+              tasks: mergeById(cloud.tasks, state.tasks),
+              orders: mergeById(cloud.orders, state.orders),
+              cloudSyncStatus: 'connected',
+              cloudSyncError: null,
+              lastCloudSyncTime: new Date().toISOString(),
             }));
           }
         } catch (err) {
           console.debug('SyncFromCloud notice:', err);
         }
+      },
+
+      // Manual sync trigger action
+      triggerManualSync: async () => {
+        set({ cloudSyncStatus: 'syncing' });
+        await get().syncFromCloud();
+        await pushToCloud(get());
       },
 
       // Actions - Authentication
@@ -199,37 +407,75 @@ export const useAppStore = create(
             });
 
             if (!error && data?.session?.user) {
+              const authUser = data.session.user;
               await get().syncFromCloud();
 
-              let user = get().users.find((u) => u.email.toLowerCase() === cleanEmail);
-              if (!user) {
-                // Try fetching profile from profiles table
-                const { data: profile } = await supabase
+              let profile = null;
+              try {
+                const { data: pData } = await supabase
                   .from('profiles')
                   .select('*')
-                  .eq('id', data.session.user.id)
+                  .eq('id', authUser.id)
                   .single();
-
-                user = {
-                  id: data.session.user.id,
-                  name: profile?.name || data.session.user.user_metadata?.full_name || cleanEmail.split('@')[0],
-                  email: cleanEmail,
-                  role: profile?.role || ROLES.ADMIN,
-                  avatar: profile?.avatar || AVATAR_PRESETS.Male[0],
-                  gender: profile?.gender || 'Male',
-                  department: profile?.department || 'Executive Board',
-                  territory: profile?.territory || 'Pan-India',
-                  status: 'Active',
-                };
-                set((state) => ({ users: [user, ...state.users.filter((u) => u.email.toLowerCase() !== cleanEmail)] }));
+                profile = pData;
+              } catch (e) {
+                // profiles query error is safe to ignore
               }
+
+              const metaRole = authUser.user_metadata?.role;
+              const metaName = authUser.user_metadata?.full_name;
+              const metaDept = authUser.user_metadata?.department;
+              const metaAvatar = authUser.user_metadata?.avatar_url;
+              const metaGender = authUser.user_metadata?.gender;
+              const metaTerritory = authUser.user_metadata?.territory;
+              const metaPhone = authUser.user_metadata?.phone;
+
+              let existingUser = get().users.find((u) => u.email?.toLowerCase() === cleanEmail);
+
+              // Accurately determine role - NEVER default an engineer to Admin!
+              let resolvedRole =
+                profile?.role ||
+                metaRole ||
+                (existingUser?.role && existingUser.role !== ROLES.ADMIN ? existingUser.role : null) ||
+                (cleanEmail === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
+
+              // If cleanEmail is NOT admin@tmi-erp.com and was mistakenly saved as ADMIN, repair it
+              if (cleanEmail !== 'admin@tmi-erp.com' && resolvedRole === ROLES.ADMIN) {
+                resolvedRole = metaRole || ROLES.APPLICATION_ENGINEER;
+              }
+
+              const defaultDept =
+                resolvedRole === ROLES.APPLICATION_ENGINEER
+                  ? 'Application Engineering'
+                  : resolvedRole === ROLES.SALES_ENGINEER
+                  ? 'Sales & Marketing'
+                  : 'Executive Board';
+
+              const user = {
+                id: authUser.id,
+                name: profile?.name || metaName || existingUser?.name || cleanEmail.split('@')[0],
+                email: cleanEmail,
+                role: resolvedRole,
+                avatar: profile?.avatar || metaAvatar || existingUser?.avatar || AVATAR_PRESETS.Male[0],
+                gender: profile?.gender || metaGender || existingUser?.gender || 'Male',
+                department: profile?.department || metaDept || existingUser?.department || defaultDept,
+                territory: profile?.territory || metaTerritory || existingUser?.territory || 'Pan-India',
+                phone: profile?.phone || metaPhone || existingUser?.phone || '',
+                status: 'Active',
+              };
 
               let defaultTab = 'dashboard';
               if (user.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
               if (user.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
 
-              set({ currentUser: user, isAuthenticated: true, activeTab: defaultTab });
-              pushToCloud(get());
+              set((state) => ({
+                currentUser: user,
+                isAuthenticated: true,
+                activeTab: defaultTab,
+                users: [user, ...state.users.filter((u) => u.email?.toLowerCase() !== cleanEmail && u.id !== user.id)],
+              }));
+
+              await pushToCloud(get());
               return { success: true, user };
             }
           } catch (err) {
@@ -251,6 +497,11 @@ export const useAppStore = create(
         }
 
         if (found) {
+          // If non-admin user was previously corrupted into ADMIN, repair it
+          if (found.email.toLowerCase() !== 'admin@tmi-erp.com' && found.role === ROLES.ADMIN) {
+            found = { ...found, role: ROLES.APPLICATION_ENGINEER };
+          }
+
           let defaultTab = 'dashboard';
           if (found.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
           if (found.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
@@ -359,6 +610,7 @@ export const useAppStore = create(
               userData.role,
               {
                 avatar: userData.avatar,
+                gender: userData.gender,
                 department: userData.department,
                 territory: userData.territory,
                 status: userData.status,

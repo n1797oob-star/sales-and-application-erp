@@ -1,26 +1,44 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Vite exposes env variables with VITE_ prefix
-const rawUrl =
-  import.meta.env.VITE_SUPABASE_URL ||
-  import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
-  '';
+// Support Vite env variables or runtime localStorage settings
+const getStoredConfig = () => {
+  const envUrl =
+    import.meta.env.VITE_SUPABASE_URL ||
+    import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
+    '';
+  const envKey =
+    import.meta.env.VITE_SUPABASE_ANON_KEY ||
+    import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    '';
 
-const rawKey =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  '';
+  const localUrl = typeof window !== 'undefined' ? localStorage.getItem('tmi_supabase_url') || '' : '';
+  const localKey = typeof window !== 'undefined' ? localStorage.getItem('tmi_supabase_anon_key') || '' : '';
 
-export const isSupabaseConfigured = Boolean(
-  rawUrl &&
-  rawKey &&
-  rawUrl.startsWith('http') &&
-  !rawUrl.includes('placeholder')
-);
+  const finalUrl = (envUrl || localUrl).trim();
+  const finalKey = (envKey || localKey).trim();
 
-// Fallback dummy client so createClient never throws on startup
-const supabaseUrl = isSupabaseConfigured ? rawUrl : 'https://dummy-app-placeholder.supabase.co';
-const supabaseAnonKey = isSupabaseConfigured ? rawKey : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy';
+  return {
+    url: finalUrl,
+    key: finalKey,
+    isConfigured: Boolean(
+      finalUrl &&
+      finalKey &&
+      finalUrl.startsWith('http') &&
+      !finalUrl.includes('placeholder')
+    ),
+  };
+};
+
+const initialConfig = getStoredConfig();
+
+export const isSupabaseConfigured = initialConfig.isConfigured;
+
+const supabaseUrl = initialConfig.isConfigured
+  ? initialConfig.url
+  : 'https://dummy-app-placeholder.supabase.co';
+const supabaseAnonKey = initialConfig.isConfigured
+  ? initialConfig.key
+  : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
@@ -28,6 +46,23 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
   },
 });
+
+// Allow user to set credentials in UI without rebuild
+export const setSupabaseCredentials = (url, key) => {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('tmi_supabase_url', url.trim());
+    localStorage.setItem('tmi_supabase_anon_key', key.trim());
+    window.location.reload();
+  }
+};
+
+export const clearSupabaseCredentials = () => {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('tmi_supabase_url');
+    localStorage.removeItem('tmi_supabase_anon_key');
+    window.location.reload();
+  }
+};
 
 // Create user from Admin Panel without logging out the currently active Admin
 export const createAdminUser = async (email, password, name, role, extra = {}) => {
@@ -37,13 +72,21 @@ export const createAdminUser = async (email, password, name, role, extra = {}) =
 
   try {
     // Isolated client so Admin session is not replaced
-    const isolatedClient = createClient(rawUrl, rawKey, {
+    const isolatedClient = createClient(initialConfig.url, initialConfig.key, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false,
       },
     });
+
+    const userDepartment =
+      extra.department ||
+      (role === 'Application Engineer'
+        ? 'Application Engineering'
+        : role === 'Sales Engineer'
+        ? 'Sales & Marketing'
+        : 'Executive Board');
 
     const { data, error } = await isolatedClient.auth.signUp({
       email: email.trim(),
@@ -53,6 +96,11 @@ export const createAdminUser = async (email, password, name, role, extra = {}) =
           full_name: name,
           role: role,
           avatar_url: extra.avatar || '',
+          gender: extra.gender || 'Male',
+          department: userDepartment,
+          territory: extra.territory || 'Pan-India',
+          phone: extra.phone || '',
+          status: extra.status || 'Active',
         },
       },
     });
@@ -66,30 +114,26 @@ export const createAdminUser = async (email, password, name, role, extra = {}) =
       return { success: false, error: 'No user ID returned from Supabase Auth' };
     }
 
-    // Upsert into `profiles` table using main client
+    // Upsert into `profiles` table using client
     try {
       const profilePayload = {
         id: userId,
-        role: role || 'SALES_ENGINEER',
+        role: role,
         name: name || '',
+        email: email.trim(),
+        avatar: extra.avatar || '',
+        gender: extra.gender || 'Male',
+        department: userDepartment,
+        territory: extra.territory || 'Pan-India',
+        status: extra.status || 'Active',
+        phone: extra.phone || '',
       };
-      await supabase.from('profiles').upsert(profilePayload);
 
-      // Attempt to save extended fields if columns exist in profiles
-      try {
-        await supabase
-          .from('profiles')
-          .update({
-            email: email.trim(),
-            avatar: extra.avatar || '',
-            department: extra.department || '',
-            territory: extra.territory || '',
-            status: extra.status || 'Active',
-            phone: extra.phone || '',
-          })
-          .eq('id', userId);
-      } catch (e) {
-        // Column might not exist in profiles table; safe to ignore
+      // If isolatedClient has an active session for the new user, use it; otherwise use main client
+      const clientToUse = data.session ? isolatedClient : supabase;
+      const { error: profileErr } = await clientToUse.from('profiles').upsert(profilePayload);
+      if (profileErr) {
+        console.warn('Profile table upsert notice (safe if table trigger handled it):', profileErr.message);
       }
     } catch (profileErr) {
       console.warn('Profile upsert warning:', profileErr);
