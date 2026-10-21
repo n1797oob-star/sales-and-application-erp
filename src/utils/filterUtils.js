@@ -89,9 +89,21 @@ export const isWithinDatePreset = (dateStr, datePreset, startDate, endDate) => {
 export const filterVisits = (visits, filters = {}, currentUser = null, customers = [], products = [], users = []) => {
   if (!Array.isArray(visits)) return [];
   filters = filters || {};
+
+  // Collect ALL IDs that belong to the current user (handles old local IDs vs Supabase UUIDs)
+  const currentUserIds = new Set();
+  if (currentUser?.id) currentUserIds.add(currentUser.id);
+  if (currentUser?.email) {
+    users.forEach((u) => {
+      if (u.email?.toLowerCase() === currentUser.email?.toLowerCase() && u.id) {
+        currentUserIds.add(u.id);
+      }
+    });
+  }
+
   return visits.filter((v) => {
-    // Sales Engineer restricted to own visits
-    if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && v.salesEngineerId !== currentUser.id) {
+    // Sales Engineer restricted to own visits — match by any known ID for this user
+    if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && !currentUserIds.has(v.salesEngineerId)) {
       return false;
     }
 
@@ -133,8 +145,20 @@ export const filterVisits = (visits, filters = {}, currentUser = null, customers
 export const filterOfficeWorks = (works, filters = {}, currentUser = null, customers = [], users = []) => {
   if (!Array.isArray(works)) return [];
   filters = filters || {};
+
+  // Collect ALL IDs that belong to the current user
+  const currentUserIds = new Set();
+  if (currentUser?.id) currentUserIds.add(currentUser.id);
+  if (currentUser?.email) {
+    users.forEach((u) => {
+      if (u.email?.toLowerCase() === currentUser.email?.toLowerCase() && u.id) {
+        currentUserIds.add(u.id);
+      }
+    });
+  }
+
   return works.filter((w) => {
-    if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && w.salesEngineerId !== currentUser.id) {
+    if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && !currentUserIds.has(w.salesEngineerId)) {
       return false;
     }
 
@@ -165,8 +189,20 @@ export const filterOfficeWorks = (works, filters = {}, currentUser = null, custo
 export const filterKras = (kras, filters = {}, currentUser = null, customers = [], products = [], users = []) => {
   if (!Array.isArray(kras)) return [];
   filters = filters || {};
+
+  // Collect ALL IDs that belong to the current user (handles old local IDs vs Supabase UUIDs)
+  const currentUserIds = new Set();
+  if (currentUser?.id) currentUserIds.add(currentUser.id);
+  if (currentUser?.email) {
+    users.forEach((u) => {
+      if (u.email?.toLowerCase() === currentUser.email?.toLowerCase() && u.id) {
+        currentUserIds.add(u.id);
+      }
+    });
+  }
+
   return kras.filter((k) => {
-    if (currentUser && currentUser.role === ROLES.APPLICATION_ENGINEER && k.appEngineerId !== currentUser.id) {
+    if (currentUser && currentUser.role === ROLES.APPLICATION_ENGINEER && !currentUserIds.has(k.appEngineerId)) {
       return false;
     }
 
@@ -246,8 +282,20 @@ export const filterTasks = (tasks, filters = {}, currentUser = null, users = [])
 export const filterOrders = (orders, filters = {}, currentUser = null, customers = [], products = [], users = []) => {
   if (!Array.isArray(orders)) return [];
   filters = filters || {};
+
+  // Collect ALL IDs that belong to the current user
+  const currentUserIds = new Set();
+  if (currentUser?.id) currentUserIds.add(currentUser.id);
+  if (currentUser?.email) {
+    users.forEach((u) => {
+      if (u.email?.toLowerCase() === currentUser.email?.toLowerCase() && u.id) {
+        currentUserIds.add(u.id);
+      }
+    });
+  }
+
   return orders.filter((o) => {
-    if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && o.salesEngineerId !== currentUser.id) {
+    if (currentUser && currentUser.role === ROLES.SALES_ENGINEER && !currentUserIds.has(o.salesEngineerId)) {
       return false;
     }
 

@@ -31,6 +31,32 @@ const mergeById = (cloudArr = [], localArr = []) => {
   return Array.from(map.values());
 };
 
+// Merge users by email (deduplication) — keeps Supabase UUID as primary ID when available
+const mergeUsersByEmail = (arrA = [], arrB = []) => {
+  const emailMap = new Map();
+  // arrA first (lower priority — seed/old data)
+  (arrA || []).forEach((u) => {
+    if (!u || !u.email) return;
+    const key = u.email.toLowerCase();
+    if (!emailMap.has(key)) emailMap.set(key, { ...u });
+  });
+  // arrB second (higher priority — Supabase/new data)
+  (arrB || []).forEach((u) => {
+    if (!u || !u.email) return;
+    const key = u.email.toLowerCase();
+    if (emailMap.has(key)) {
+      const existing = emailMap.get(key);
+      // Prefer UUID (longer ID = Supabase UUID) over old timestamp IDs
+      const betterID =
+        existing.id && existing.id.length > 20 ? existing.id : (u.id && u.id.length > 20 ? u.id : existing.id || u.id);
+      emailMap.set(key, { ...existing, ...u, id: betterID });
+    } else {
+      emailMap.set(key, { ...u });
+    }
+  });
+  return Array.from(emailMap.values());
+};
+
 // Push universal state to Supabase so all laptops see the exact same data without overwriting each other
 const pushToCloud = async (state) => {
   if (!isSupabaseConfigured) return;
@@ -322,34 +348,21 @@ export const useAppStore = create(
           const { data: profiles, error: pError } = await supabase.from('profiles').select('*');
           if (!pError && Array.isArray(profiles) && profiles.length > 0) {
             set((state) => {
-              const updatedUsers = [...state.users];
-              profiles.forEach((p) => {
-                const existingIndex = updatedUsers.findIndex(
-                  (u) => u.id === p.id || (p.email && u.email?.toLowerCase() === p.email?.toLowerCase())
-                );
-                if (existingIndex >= 0) {
-                  updatedUsers[existingIndex] = {
-                    ...updatedUsers[existingIndex],
-                    ...p,
-                    name: p.name || updatedUsers[existingIndex].name,
-                    role: p.role || updatedUsers[existingIndex].role,
-                  };
-                } else {
-                  updatedUsers.push({
-                    id: p.id,
-                    name: p.name || 'User',
-                    email: p.email || '',
-                    role: p.role || ROLES.APPLICATION_ENGINEER,
-                    avatar: p.avatar || AVATAR_PRESETS.Male[0],
-                    gender: p.gender || 'Male',
-                    department: p.department || (p.role === ROLES.APPLICATION_ENGINEER ? 'Application Engineering' : 'Sales Engineering'),
-                    territory: p.territory || 'Pan-India',
-                    status: p.status || 'Active',
-                    password: 'password123',
-                  });
-                }
-              });
-              return { users: updatedUsers };
+              const profilesFormatted = profiles.map((p) => ({
+                id: p.id,
+                name: p.name || 'User',
+                email: (p.email || '').toLowerCase(),
+                role: p.role || ROLES.APPLICATION_ENGINEER,
+                avatar: p.avatar || AVATAR_PRESETS.Male[0],
+                gender: p.gender || 'Male',
+                department: p.department || (p.role === ROLES.APPLICATION_ENGINEER ? 'Application Engineering' : 'Sales Engineering'),
+                territory: p.territory || 'Pan-India',
+                status: p.status || 'Active',
+                password: 'password123',
+              }));
+              // Deduplicate: merge local users with cloud profiles by email
+              const mergedUsers = mergeUsersByEmail(state.users, profilesFormatted);
+              return { users: mergedUsers };
             });
           }
 
@@ -474,12 +487,44 @@ export const useAppStore = create(
               if (user.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
               if (user.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
 
-              set((state) => ({
-                currentUser: user,
-                isAuthenticated: true,
-                activeTab: defaultTab,
-                users: [user, ...state.users.filter((u) => u.email?.toLowerCase() !== cleanEmail && u.id !== user.id)],
-              }));
+              // Collect all old local IDs this email previously used (timestamp IDs like u-17290xxx)
+              const oldIds = new Set();
+              get().users.forEach((u) => {
+                if (u.email?.toLowerCase() === cleanEmail && u.id !== user.id) {
+                  oldIds.add(u.id);
+                }
+              });
+
+              set((state) => {
+                // Re-tag records that were created with old local IDs so filters work correctly
+                const fixedVisits = oldIds.size
+                  ? state.visits.map((v) => oldIds.has(v.salesEngineerId) ? { ...v, salesEngineerId: user.id } : v)
+                  : state.visits;
+                const fixedOfficeWorks = oldIds.size
+                  ? state.officeWorks.map((w) => oldIds.has(w.salesEngineerId) ? { ...w, salesEngineerId: user.id } : w)
+                  : state.officeWorks;
+                const fixedOrders = oldIds.size
+                  ? state.orders.map((o) => oldIds.has(o.salesEngineerId) ? { ...o, salesEngineerId: user.id } : o)
+                  : state.orders;
+                const fixedKras = oldIds.size
+                  ? state.kraActivities.map((k) => oldIds.has(k.appEngineerId) ? { ...k, appEngineerId: user.id } : k)
+                  : state.kraActivities;
+
+                return {
+                  currentUser: user,
+                  isAuthenticated: true,
+                  activeTab: defaultTab,
+                  visits: fixedVisits,
+                  officeWorks: fixedOfficeWorks,
+                  orders: fixedOrders,
+                  kraActivities: fixedKras,
+                  // Deduplicate users by email � remove old entries for same email
+                  users: mergeUsersByEmail(
+                    state.users.filter((u) => u.email?.toLowerCase() !== cleanEmail),
+                    [user]
+                  ),
+                };
+              });
 
               await pushToCloud(get());
               return { success: true, user };
