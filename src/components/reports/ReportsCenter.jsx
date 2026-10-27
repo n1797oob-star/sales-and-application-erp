@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { ROLES, formatDate, formatCurrency } from '../../types';
+import { filterVisits, filterOfficeWorks, filterKras, filterOrders, filterTasks } from '../../utils/filterUtils';
 import { FilterBar } from '../common/FilterBar';
 import { ExportButton } from '../common/ExportButton';
 import { FileBarChart, Download, FileSpreadsheet, FileText, Printer, CheckCircle, Shield } from 'lucide-react';
@@ -11,15 +12,22 @@ export const ReportsCenter = () => {
 
   const isAdmin = currentUser?.role === ROLES.ADMIN;
 
+  // Filtered collections based on active global filter bar
+  const filteredVisits = filterVisits(visits, filters, currentUser, customers, products, users);
+  const filteredOffice = filterOfficeWorks(officeWorks, filters, currentUser, customers, users);
+  const filteredKras = filterKras(kraActivities, filters, currentUser, customers, products, users);
+  const filteredOrders = filterOrders(orders || [], filters, currentUser, customers, products, users);
+  const filteredTasks = filterTasks(tasks, filters, currentUser, users);
+
   // Generate dataset based on report selection
   const getReportData = () => {
     if (reportType === 'executive') {
       return users.map((u) => {
-        const vCount = visits.filter((v) => v.salesEngineerId === u.id).length;
-        const oCount = officeWorks.filter((w) => w.salesEngineerId === u.id).length;
-        const kCount = kraActivities.filter((k) => k.appEngineerId === u.id).length;
-        const pCount = (orders || []).filter((o) => o.salesEngineerId === u.id).length;
-        const tCount = tasks.filter((t) => t.assignedToId === u.id && t.status === 'Completed').length;
+        const vCount = filteredVisits.filter((v) => v.salesEngineerId === u.id).length;
+        const oCount = filteredOffice.filter((w) => w.salesEngineerId === u.id).length;
+        const kCount = filteredKras.filter((k) => k.appEngineerId === u.id).length;
+        const pCount = (filteredOrders || []).filter((o) => o.salesEngineerId === u.id).length;
+        const tCount = filteredTasks.filter((t) => t.assignedToId === u.id && t.status === 'Completed').length;
         return {
           'Employee Name': u.name,
           Role: u.role,
@@ -34,7 +42,7 @@ export const ReportsCenter = () => {
     }
 
     if (reportType === 'visits') {
-      return visits.map((v) => {
+      return filteredVisits.map((v) => {
         const cust = customers.find((c) => c.id === v.customerId);
         const prod = products.find((p) => p.id === v.productId);
         const eng = users.find((u) => u.id === v.salesEngineerId);
@@ -52,7 +60,7 @@ export const ReportsCenter = () => {
     }
 
     if (reportType === 'kras') {
-      return kraActivities.map((k) => {
+      return filteredKras.map((k) => {
         const cust = customers.find((c) => c.id === k.customerId);
         const prod = products.find((p) => p.id === k.productId);
         const ae = users.find((u) => u.id === k.appEngineerId);
@@ -69,7 +77,7 @@ export const ReportsCenter = () => {
     }
 
     if (reportType === 'orders') {
-      return (orders || []).map((o) => {
+      return (filteredOrders || []).map((o) => {
         const cust = customers.find((c) => c.id === o.customerId);
         const prod = products.find((p) => p.id === o.productId);
         const eng = users.find((u) => u.id === o.salesEngineerId);

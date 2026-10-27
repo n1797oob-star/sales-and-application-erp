@@ -17,6 +17,7 @@ import {
   Sparkles,
   RotateCcw,
   Lock,
+  RefreshCw,
 } from 'lucide-react';
 
 export const UserManagement = () => {
@@ -28,12 +29,15 @@ export const UserManagement = () => {
     currentUser,
     initializeFreshProductionSystem,
     resetToSeedData,
+    verifyAdminPassword,
   } = useAppStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [deletingUser, setDeletingUser] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [resetPasswordInput, setResetPasswordInput] = useState('');
   const [resetError, setResetError] = useState('');
 
@@ -109,10 +113,20 @@ export const UserManagement = () => {
     resetForm();
   };
 
-  const handleDeleteConfirm = () => {
+  const handleDeleteConfirm = async () => {
     if (!deletingUser) return;
-    deleteUser(deletingUser.id);
-    setDeletingUser(null);
+    setIsDeleting(true);
+    try {
+      const res = await deleteUser(deletingUser.id);
+      if (res && res.error) {
+        alert(res.error);
+      }
+      setDeletingUser(null);
+    } catch (err) {
+      alert('Error deleting user: ' + (err.message || err));
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const resetForm = () => {
@@ -530,15 +544,18 @@ export const UserManagement = () => {
             <div className="pt-2 flex justify-end space-x-2">
               <button
                 onClick={() => setDeletingUser(null)}
+                disabled={isDeleting}
                 className="px-4 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDeleteConfirm}
-                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg shadow-md"
+                disabled={isDeleting}
+                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-md flex items-center space-x-1"
               >
-                Delete User
+                {isDeleting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isDeleting ? 'Deleting User...' : 'Delete User'}</span>
               </button>
             </div>
           </div>
@@ -591,28 +608,40 @@ export const UserManagement = () => {
             <div className="pt-2 flex justify-end space-x-2 border-t border-slate-100">
               <button
                 onClick={() => setIsResetModalOpen(false)}
+                disabled={isResetting}
                 className="px-4 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
               >
                 Cancel
               </button>
               <button
-                onClick={() => {
+                disabled={isResetting}
+                onClick={async () => {
                   if (!resetPasswordInput.trim()) {
                     setResetError('Password is required.');
                     return;
                   }
-                  if (currentUser?.password && resetPasswordInput !== currentUser?.password) {
-                    setResetError('Incorrect password. Please try again.');
-                    return;
+                  setIsResetting(true);
+                  try {
+                    const verified = await verifyAdminPassword(resetPasswordInput);
+                    if (!verified) {
+                      setResetError('Incorrect admin password. Please try again.');
+                      return;
+                    }
+                    await initializeFreshProductionSystem();
+                    setIsResetModalOpen(false);
+                    setResetPasswordInput('');
+                    setResetError('');
+                    alert('Production ERP initialized successfully. All demo records have been cleared.');
+                  } catch (err) {
+                    setResetError('Reset failed: ' + (err.message || err));
+                  } finally {
+                    setIsResetting(false);
                   }
-                  initializeFreshProductionSystem();
-                  setIsResetModalOpen(false);
-                  setResetPasswordInput('');
-                  setResetError('');
                 }}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl shadow-md"
+                className="px-4 py-1.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-xl shadow-md flex items-center space-x-1"
               >
-                Confirm &amp; Reset System
+                {isResetting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isResetting ? 'Resetting System...' : 'Confirm & Reset System'}</span>
               </button>
             </div>
           </div>

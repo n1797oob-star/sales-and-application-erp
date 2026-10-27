@@ -37,8 +37,9 @@ export const BottomNav = ({ onOpenSidebar }) => {
     }
     // Admin / Manager
     return [
-      { id: dashId, label: 'Home', icon: LayoutDashboard },
-      { id: 'visits', label: 'Activities', icon: MapPin },
+      { id: dashId, label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'visits', label: 'Sales', icon: MapPin },
+      { id: 'kras', label: 'KRAs', icon: Layers },
       { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     ];
   };

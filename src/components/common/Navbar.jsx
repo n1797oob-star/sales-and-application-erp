@@ -35,6 +35,7 @@ export const Navbar = ({ onToggleSidebar }) => {
     updateUser,
     changePassword,
     initializeFreshProductionSystem,
+    verifyAdminPassword,
     cloudSyncStatus,
     triggerManualSync,
     setActiveTab,
@@ -45,6 +46,7 @@ export const Navbar = ({ onToggleSidebar }) => {
   const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [isCloudModalOpen, setIsCloudModalOpen] = useState(false);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [resetPasswordInput, setResetPasswordInput] = useState('');
@@ -629,28 +631,40 @@ export const Navbar = ({ onToggleSidebar }) => {
             <div className="pt-2 flex justify-end space-x-2 border-t border-slate-100">
               <button
                 onClick={() => setIsResetModalOpen(false)}
+                disabled={isResetting}
                 className="px-4 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
               >
                 Cancel
               </button>
               <button
-                onClick={() => {
+                disabled={isResetting}
+                onClick={async () => {
                   if (!resetPasswordInput.trim()) {
                     setResetError('Password is required.');
                     return;
                   }
-                  if (resetPasswordInput !== currentUser?.password) {
-                    setResetError('Incorrect password. Please try again.');
-                    return;
+                  setIsResetting(true);
+                  try {
+                    const isVerified = await verifyAdminPassword(resetPasswordInput);
+                    if (!isVerified) {
+                      setResetError('Incorrect admin password. Please try again.');
+                      return;
+                    }
+                    await initializeFreshProductionSystem();
+                    setIsResetModalOpen(false);
+                    setResetPasswordInput('');
+                    setResetError('');
+                    alert('Production ERP initialized successfully. All demo records have been cleared.');
+                  } catch (err) {
+                    setResetError('Reset failed: ' + (err.message || err));
+                  } finally {
+                    setIsResetting(false);
                   }
-                  initializeFreshProductionSystem();
-                  setIsResetModalOpen(false);
-                  setResetPasswordInput('');
-                  setResetError('');
                 }}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl shadow-md"
+                className="px-4 py-1.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-xl shadow-md flex items-center space-x-1"
               >
-                Confirm & Reset System
+                {isResetting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isResetting ? 'Resetting System...' : 'Confirm & Reset System'}</span>
               </button>
             </div>
           </div>

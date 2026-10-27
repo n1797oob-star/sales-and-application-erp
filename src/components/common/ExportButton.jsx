@@ -1,52 +1,77 @@
 import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 import { Download, FileSpreadsheet, FileText, Printer } from 'lucide-react';
 
-export const ExportButton = ({ data, filename = 'TMI_Export_Report', columns = [] }) => {
+export const ExportButton = ({ data = [], filename = 'TMI_Export_Report', columns = [] }) => {
   const [isOpen, setIsOpen] = useState(false);
 
+  // Sanitizes text values for standard PDF winansi encoding (replaces rupee symbol, handles null/objects)
+  const cleanForPdf = (val) => {
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'object') return JSON.stringify(val);
+    // Convert Indian Rupee symbol (₹) to 'Rs. ' so standard PDF fonts render cleanly without errors
+    return String(val).replace(/₹/g, 'Rs. ');
+  };
+
   const exportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Report');
-    XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
-    setIsOpen(false);
+    try {
+      if (!data || !data.length) {
+        alert('No data records available to export under current filters.');
+        return;
+      }
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Report');
+      XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+      setIsOpen(false);
+    } catch (err) {
+      console.error('Excel export error:', err);
+      alert('Failed to export Excel file: ' + (err.message || err));
+    }
   };
 
   const exportCSV = () => {
-    if (!data.length) return;
-    const keys = Object.keys(data[0]);
-    const csvRows = [];
-    csvRows.push(keys.join(','));
+    try {
+      if (!data || !data.length) {
+        alert('No data records available to export under current filters.');
+        return;
+      }
+      const keys = Object.keys(data[0]);
+      const csvRows = [];
+      csvRows.push(keys.join(','));
 
-    for (const row of data) {
-      const values = keys.map((key) => {
-        const val = row[key];
-        const escaped = ('' + (val ?? '')).replace(/"/g, '""');
-        return `"${escaped}"`;
-      });
-      csvRows.push(values.join(','));
+      for (const row of data) {
+        const values = keys.map((key) => {
+          const val = row[key];
+          const escaped = ('' + (val ?? '')).replace(/"/g, '""');
+          return `"${escaped}"`;
+        });
+        csvRows.push(values.join(','));
+      }
+
+      const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.setAttribute('href', url);
+      a.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      setIsOpen(false);
+    } catch (err) {
+      console.error('CSV export error:', err);
+      alert('Failed to export CSV file: ' + (err.message || err));
     }
-
-    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.setAttribute('href', url);
-    a.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
-    a.click();
-    setIsOpen(false);
   };
 
   const exportPDF = () => {
-    const doc = new jsPDF();
-    doc.setFontSize(16);
-    doc.text(`TMI ERP - ${filename.replace(/_/g, ' ')}`, 14, 15);
-    doc.setFontSize(10);
-    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 22);
+    try {
+      if (!data || !data.length) {
+        alert('No data records available to export under current filters.');
+        return;
+      }
 
-    if (data.length > 0) {
       const head = columns.length ? [columns.map((c) => c.header)] : [Object.keys(data[0])];
       const body = data.map((item) =>
         columns.length
@@ -54,18 +79,58 @@ export const ExportButton = ({ data, filename = 'TMI_Export_Report', columns = [
           : Object.values(item)
       );
 
-      doc.autoTable({
-        startY: 28,
-        head: head,
-        body: body,
-        theme: 'striped',
-        styles: { fontSize: 8 },
-        headStyles: { fillColor: [79, 70, 229] },
-      });
-    }
+      const cleanHead = head.map((row) => row.map(cleanForPdf));
+      const cleanBody = body.map((row) => row.map(cleanForPdf));
 
-    doc.save(`${filename}_${new Date().toISOString().split('T')[0]}.pdf`);
-    setIsOpen(false);
+      // Choose landscape if table has more than 5 columns for clean readable layout
+      const colCount = cleanHead[0]?.length || 0;
+      const orientation = colCount > 5 ? 'landscape' : 'portrait';
+
+      const doc = new jsPDF({
+        orientation,
+        unit: 'mm',
+        format: 'a4',
+      });
+
+      doc.setFontSize(14);
+      doc.text(`TMI ERP - ${filename.replace(/_/g, ' ')}`, 14, 15);
+      doc.setFontSize(9);
+      doc.setTextColor(100);
+      doc.text(`Generated on: ${new Date().toLocaleString()} • Total Records: ${data.length}`, 14, 21);
+
+      // Support direct function call or instance method
+      const autoTableFn = (typeof autoTable === 'function' ? autoTable : autoTable?.default) || doc.autoTable;
+
+      if (typeof autoTableFn === 'function') {
+        autoTableFn(doc, {
+          startY: 26,
+          head: cleanHead,
+          body: cleanBody,
+          theme: 'striped',
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [79, 70, 229], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+        });
+      } else if (typeof doc.autoTable === 'function') {
+        doc.autoTable({
+          startY: 26,
+          head: cleanHead,
+          body: cleanBody,
+          theme: 'striped',
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [79, 70, 229], textColor: 255, fontStyle: 'bold' },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+        });
+      } else {
+        throw new Error('PDF Table formatting engine could not be attached.');
+      }
+
+      doc.save(`${filename}_${new Date().toISOString().split('T')[0]}.pdf`);
+      setIsOpen(false);
+    } catch (err) {
+      console.error('PDF export error:', err);
+      alert('Failed to generate PDF: ' + (err.message || err));
+    }
   };
 
   return (
