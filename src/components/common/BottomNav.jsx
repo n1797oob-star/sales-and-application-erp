@@ -6,12 +6,19 @@ import {
   MapPin,
   Layers,
   CheckSquare,
+  ShieldCheck,
   Menu,
 } from 'lucide-react';
 
 export const BottomNav = ({ onOpenSidebar }) => {
   const { activeTab, setActiveTab, currentUser } = useAppStore();
   const role = normalizeRole(currentUser?.role);
+  const userEmail = String(currentUser?.email || '').toLowerCase().trim();
+  const isAdmin =
+    role === ROLES.ADMIN ||
+    userEmail === 'admin@tmi-erp.com' ||
+    userEmail.includes('admin') ||
+    String(currentUser?.role || '').toLowerCase().includes('admin');
 
   const getDashboardId = () => {
     if (role === ROLES.SALES_ENGINEER) return 'dashboard_se';
@@ -21,6 +28,14 @@ export const BottomNav = ({ onOpenSidebar }) => {
 
   const getNavs = () => {
     const dashId = getDashboardId();
+    if (isAdmin) {
+      return [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'users', label: 'Users', icon: ShieldCheck },
+        { id: 'visits', label: 'Sales', icon: MapPin },
+        { id: 'kras', label: 'KRAs', icon: Layers },
+      ];
+    }
     if (role === ROLES.SALES_ENGINEER) {
       return [
         { id: dashId, label: 'Home', icon: LayoutDashboard },
@@ -35,7 +50,7 @@ export const BottomNav = ({ onOpenSidebar }) => {
         { id: 'tasks', label: 'Tasks', icon: CheckSquare },
       ];
     }
-    // Admin / Manager
+    // Manager
     return [
       { id: dashId, label: 'Dashboard', icon: LayoutDashboard },
       { id: 'visits', label: 'Sales', icon: MapPin },

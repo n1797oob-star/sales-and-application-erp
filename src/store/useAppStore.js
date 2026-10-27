@@ -69,6 +69,10 @@ const determineUserRole = (email = '', metaRole, profileRole, existingRole) => {
   if (cleanEmail === 'admin@tmi-erp.com' || cleanEmail.includes('admin')) {
     return ROLES.ADMIN;
   }
+  if (profileRole && normalizeRole(profileRole) === ROLES.ADMIN) return ROLES.ADMIN;
+  if (metaRole && normalizeRole(metaRole) === ROLES.ADMIN) return ROLES.ADMIN;
+  if (existingRole && normalizeRole(existingRole) === ROLES.ADMIN) return ROLES.ADMIN;
+
   if (profileRole) return normalizeRole(profileRole);
   if (metaRole) return normalizeRole(metaRole);
   if (existingRole) return normalizeRole(existingRole);
@@ -295,50 +299,27 @@ export const useAppStore = create(
 
           // 4. Check Supabase auth session
           const { data: { session } } = await supabase.auth.getSession();
+          const existingCurrent = get().currentUser;
+          const isCurrentAdmin =
+            existingCurrent &&
+            (normalizeRole(existingCurrent.role) === ROLES.ADMIN ||
+              String(existingCurrent.email || '').toLowerCase().includes('admin'));
+
           if (session?.user) {
             const email = (session.user.email || '').toLowerCase();
-            const metaRole = session.user.user_metadata?.role;
-            const metaName = session.user.user_metadata?.full_name;
-            const metaDept = session.user.user_metadata?.department;
 
-            let matchedUser = (get().users || []).find((u) => String(u?.email || '').toLowerCase().trim() === email);
+            // Do not downgrade a locally logged-in Admin unless session matches Admin email
+            if (!isCurrentAdmin || email === 'admin@tmi-erp.com' || email.includes('admin')) {
+              let profile = null;
+              try {
+                const { data: pData } = await supabase
+                  .from('profiles')
+                  .select('*')
+                  .eq('id', session.user.id)
+                  .single();
+                profile = pData;
+              } catch (e) {}
 
-            const resolvedRole = determineUserRole(
-              email,
-              metaRole,
-              null,
-              matchedUser?.role
-            );
-
-            const defaultDept = getDepartmentForRole(resolvedRole, matchedUser?.department || metaDept);
-
-            const userObj = {
-              id: session.user.id,
-              name: matchedUser?.name || metaName || email.split('@')[0],
-              email: email,
-              role: resolvedRole,
-              avatar: matchedUser?.avatar || session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
-              gender: matchedUser?.gender || session.user.user_metadata?.gender || 'Male',
-              department: defaultDept,
-              territory: matchedUser?.territory || session.user.user_metadata?.territory || 'Pan-India',
-              phone: matchedUser?.phone || session.user.user_metadata?.phone || '',
-              status: 'Active',
-            };
-
-            const defaultTab = getDefaultTabForRole(userObj.role);
-
-            set((state) => ({
-              currentUser: userObj,
-              isAuthenticated: true,
-              activeTab: state.activeTab === 'dashboard' ? defaultTab : state.activeTab,
-              users: mergeUsersByEmail(state.users, [userObj]),
-            }));
-          }
-
-          // 5. Auth state change listener
-          supabase.auth.onAuthStateChange(async (event, session) => {
-            if (session?.user) {
-              const email = (session.user.email || '').toLowerCase();
               const metaRole = session.user.user_metadata?.role;
               const metaName = session.user.user_metadata?.full_name;
               const metaDept = session.user.user_metadata?.department;
@@ -348,23 +329,24 @@ export const useAppStore = create(
               const resolvedRole = determineUserRole(
                 email,
                 metaRole,
-                null,
-                matchedUser?.role
+                profile?.role,
+                matchedUser?.role || existingCurrent?.role
               );
 
-              const defaultDept = getDepartmentForRole(resolvedRole, matchedUser?.department || metaDept);
+              const defaultDept = getDepartmentForRole(resolvedRole, profile?.department || matchedUser?.department || metaDept);
 
               const userObj = {
                 id: session.user.id,
-                name: matchedUser?.name || metaName || email.split('@')[0],
+                name: profile?.name || matchedUser?.name || metaName || email.split('@')[0],
                 email: email,
                 role: resolvedRole,
-                avatar: matchedUser?.avatar || session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
-                gender: matchedUser?.gender || session.user.user_metadata?.gender || 'Male',
+                avatar: profile?.avatar || matchedUser?.avatar || session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
+                gender: profile?.gender || matchedUser?.gender || session.user.user_metadata?.gender || 'Male',
                 department: defaultDept,
-                territory: matchedUser?.territory || session.user.user_metadata?.territory || 'Pan-India',
-                phone: matchedUser?.phone || session.user.user_metadata?.phone || '',
+                territory: profile?.territory || matchedUser?.territory || session.user.user_metadata?.territory || 'Pan-India',
+                phone: profile?.phone || matchedUser?.phone || session.user.user_metadata?.phone || '',
                 status: 'Active',
+                password: existingCurrent?.password || matchedUser?.password || 'password123',
               };
 
               const defaultTab = getDefaultTabForRole(userObj.role);
@@ -375,8 +357,74 @@ export const useAppStore = create(
                 activeTab: state.activeTab === 'dashboard' ? defaultTab : state.activeTab,
                 users: mergeUsersByEmail(state.users, [userObj]),
               }));
+            }
+          }
+
+          // 5. Auth state change listener
+          supabase.auth.onAuthStateChange(async (event, session) => {
+            const current = get().currentUser;
+            const currentIsAdmin =
+              current &&
+              (normalizeRole(current.role) === ROLES.ADMIN ||
+                String(current.email || '').toLowerCase().includes('admin'));
+
+            if (session?.user) {
+              const email = (session.user.email || '').toLowerCase();
+
+              if (!currentIsAdmin || email === 'admin@tmi-erp.com' || email.includes('admin')) {
+                let profile = null;
+                try {
+                  const { data: pData } = await supabase
+                    .from('profiles')
+                    .select('*')
+                    .eq('id', session.user.id)
+                    .single();
+                  profile = pData;
+                } catch (e) {}
+
+                const metaRole = session.user.user_metadata?.role;
+                const metaName = session.user.user_metadata?.full_name;
+                const metaDept = session.user.user_metadata?.department;
+
+                let matchedUser = (get().users || []).find((u) => String(u?.email || '').toLowerCase().trim() === email);
+
+                const resolvedRole = determineUserRole(
+                  email,
+                  metaRole,
+                  profile?.role,
+                  matchedUser?.role || current?.role
+                );
+
+                const defaultDept = getDepartmentForRole(resolvedRole, profile?.department || matchedUser?.department || metaDept);
+
+                const userObj = {
+                  id: session.user.id,
+                  name: profile?.name || matchedUser?.name || metaName || email.split('@')[0],
+                  email: email,
+                  role: resolvedRole,
+                  avatar: profile?.avatar || matchedUser?.avatar || session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
+                  gender: profile?.gender || matchedUser?.gender || session.user.user_metadata?.gender || 'Male',
+                  department: defaultDept,
+                  territory: profile?.territory || matchedUser?.territory || session.user.user_metadata?.territory || 'Pan-India',
+                  phone: profile?.phone || matchedUser?.phone || session.user.user_metadata?.phone || '',
+                  status: 'Active',
+                  password: current?.password || matchedUser?.password || 'password123',
+                };
+
+                const defaultTab = getDefaultTabForRole(userObj.role);
+
+                set((state) => ({
+                  currentUser: userObj,
+                  isAuthenticated: true,
+                  activeTab: state.activeTab === 'dashboard' ? defaultTab : state.activeTab,
+                  users: mergeUsersByEmail(state.users, [userObj]),
+                }));
+              }
             } else if (event === 'SIGNED_OUT') {
-              set({ currentUser: null, isAuthenticated: false, activeTab: 'dashboard' });
+              // Only sign out if local user is not primary admin
+              if (!currentIsAdmin) {
+                set({ currentUser: null, isAuthenticated: false, activeTab: 'dashboard' });
+              }
             }
           });
         } catch (err) {
