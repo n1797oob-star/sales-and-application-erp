@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { ROLES } from '../../types';
+import { ROLES, normalizeRole } from '../../types';
 import { AVATAR_PRESETS } from '../../store/seedData';
 import { CloudSetupModal } from './CloudSetupModal';
 import {
@@ -37,6 +37,7 @@ export const Navbar = ({ onToggleSidebar }) => {
     initializeFreshProductionSystem,
     cloudSyncStatus,
     triggerManualSync,
+    setActiveTab,
   } = useAppStore();
 
   const [isNotifOpen, setIsNotifOpen] = useState(false);
@@ -346,19 +347,45 @@ export const Navbar = ({ onToggleSidebar }) => {
                     <span>Cloud Database &amp; Sync</span>
                   </button>
 
-                  {currentUser?.role === ROLES.ADMIN && (
-                    <button
-                      onClick={() => {
-                        setIsUserMenuOpen(false);
-                        setResetPasswordInput('');
-                        setResetError('');
-                        setIsResetModalOpen(true);
-                      }}
-                      className="w-full text-left px-3 py-2 text-xs flex items-center space-x-2 text-emerald-700 hover:bg-emerald-50 font-semibold transition border-t border-slate-100"
-                    >
-                      <Sparkles className="w-4 h-4 text-emerald-600" />
-                      <span>Start Fresh Production ERP</span>
-                    </button>
+                  {(normalizeRole(currentUser?.role) === ROLES.ADMIN || currentUser?.email?.toLowerCase().includes('admin')) && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          setActiveTab('users');
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs flex items-center space-x-2 text-brand-700 hover:bg-brand-50 font-semibold transition border-t border-slate-100"
+                      >
+                        <Shield className="w-4 h-4 text-brand-600" />
+                        <span>User Management</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          setResetPasswordInput('');
+                          setResetError('');
+                          setIsResetModalOpen(true);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs flex items-center space-x-2 text-emerald-700 hover:bg-emerald-50 font-semibold transition border-t border-slate-100"
+                      >
+                        <Sparkles className="w-4 h-4 text-emerald-600" />
+                        <span>Start Fresh Production ERP</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          if (window.confirm('Reset system to default sample demo data? This will restore sample visits, KRAs, tasks, and users.')) {
+                            resetToSeedData();
+                          }
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs flex items-center space-x-2 text-slate-700 hover:bg-slate-50 font-semibold transition border-t border-slate-100"
+                      >
+                        <RotateCcw className="w-4 h-4 text-slate-600" />
+                        <span>Restore Sample Demo Data</span>
+                      </button>
+                    </>
                   )}
 
                   <button

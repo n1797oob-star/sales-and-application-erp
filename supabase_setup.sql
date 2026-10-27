@@ -1,9 +1,12 @@
 -- ================================================================
--- TMI ERP - Supabase Setup SQL
--- Run this ONCE in: Supabase Dashboard > SQL Editor > New Query
+-- TMI ERP - Supabase Setup SQL (SAFE TO RE-RUN)
+-- Paste this in: Supabase Dashboard > SQL Editor > New Query > Run
 -- ================================================================
 
--- 1. profiles table (stores user info accessible from all devices)
+
+-- ================================================================
+-- 1. PROFILES TABLE
+-- ================================================================
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY,
   name TEXT,
@@ -20,26 +23,26 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
--- Drop old policies if they exist (safe to re-run)
-DROP POLICY IF EXISTS "profiles_select_authenticated" ON profiles;
-DROP POLICY IF EXISTS "profiles_insert_own" ON profiles;
-DROP POLICY IF EXISTS "profiles_update_own" ON profiles;
-DROP POLICY IF EXISTS "profiles_service_all" ON profiles;
+-- Drop ALL existing policies on profiles (safe to re-run)
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE tablename = 'profiles' LOOP
+    EXECUTE 'DROP POLICY IF EXISTS "' || r.policyname || '" ON profiles';
+  END LOOP;
+END $$;
 
-CREATE POLICY "profiles_select_authenticated"
-  ON profiles FOR SELECT TO authenticated USING (true);
+-- Create fresh policies
+CREATE POLICY "profiles_all_authenticated"
+  ON profiles FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "profiles_insert_own"
-  ON profiles FOR INSERT TO authenticated WITH CHECK (true);
-
-CREATE POLICY "profiles_update_own"
-  ON profiles FOR UPDATE TO authenticated USING (true);
-
-CREATE POLICY "profiles_service_all"
-  ON profiles FOR ALL TO service_role USING (true);
+CREATE POLICY "profiles_all_anon"
+  ON profiles FOR ALL TO anon USING (true) WITH CHECK (true);
 
 
--- 2. erp_shared_data table (stores ALL ERP data: visits, KRAs, orders, etc.)
+-- ================================================================
+-- 2. ERP_SHARED_DATA TABLE
+-- ================================================================
 CREATE TABLE IF NOT EXISTS erp_shared_data (
   id TEXT PRIMARY KEY,
   data JSONB,
@@ -48,21 +51,40 @@ CREATE TABLE IF NOT EXISTS erp_shared_data (
 
 ALTER TABLE erp_shared_data ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "erp_data_all_authenticated" ON erp_shared_data;
-DROP POLICY IF EXISTS "erp_data_select_anon" ON erp_shared_data;
+-- Drop ALL existing policies on erp_shared_data
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT policyname FROM pg_policies WHERE tablename = 'erp_shared_data' LOOP
+    EXECUTE 'DROP POLICY IF EXISTS "' || r.policyname || '" ON erp_shared_data';
+  END LOOP;
+END $$;
 
+-- Create fresh policies (authenticated AND anon can read/write so all synced data works)
 CREATE POLICY "erp_data_all_authenticated"
   ON erp_shared_data FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "erp_data_select_anon"
-  ON erp_shared_data FOR SELECT TO anon USING (true);
+CREATE POLICY "erp_data_all_anon"
+  ON erp_shared_data FOR ALL TO anon USING (true) WITH CHECK (true);
 
 
--- 3. Enable realtime on erp_shared_data (live sync across all devices)
-ALTER PUBLICATION supabase_realtime ADD TABLE erp_shared_data;
+-- ================================================================
+-- 3. REALTIME (enable live sync across all devices)
+-- ================================================================
+DO $$
+BEGIN
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE erp_shared_data;
+  EXCEPTION WHEN OTHERS THEN
+    -- Already added, safe to ignore
+    NULL;
+  END;
+END $$;
 
 
--- 4. Auto-sync new Auth users to profiles table (trigger)
+-- ================================================================
+-- 4. AUTO-SYNC TRIGGER (new Auth users auto-added to profiles)
+-- ================================================================
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -79,8 +101,8 @@ BEGIN
   )
   ON CONFLICT (id) DO UPDATE SET
     email = EXCLUDED.email,
-    name = COALESCE(EXCLUDED.name, profiles.name),
-    role = COALESCE(EXCLUDED.role, profiles.role);
+    name   = COALESCE(EXCLUDED.name, profiles.name),
+    role   = COALESCE(EXCLUDED.role, profiles.role);
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -92,7 +114,6 @@ CREATE TRIGGER on_auth_user_created
 
 
 -- ================================================================
--- IMPORTANT: After running this, go to:
+-- Done! Now go to:
 -- Supabase > Authentication > Email > DISABLE "Confirm email"
--- (So admin-created users can log in immediately without email verification)
 -- ================================================================

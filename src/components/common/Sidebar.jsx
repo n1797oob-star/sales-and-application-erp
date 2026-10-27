@@ -90,14 +90,18 @@ export const Sidebar = ({ isOpen, onClose }) => {
   const userRole = normalizeRole(currentUser?.role);
 
   let visibleItems = navItems.filter((item) => {
-    // Admin has access to all modules
-    if (userRole === ROLES.ADMIN) return true;
+    // Admin has access to all admin modules, but does not need individual SE/AE workspaces
+    if (userRole === ROLES.ADMIN) {
+      return item.id !== 'dashboard_se' && item.id !== 'dashboard_ae';
+    }
     return item.roles.some((r) => normalizeRole(r) === userRole);
   });
 
   // Bulletproof fallback so navigation NEVER goes blank
   if (!visibleItems || visibleItems.length === 0) {
-    visibleItems = navItems;
+    visibleItems = navItems.filter(
+      (item) => item.id !== 'dashboard_se' && item.id !== 'dashboard_ae'
+    );
   }
 
   return (
@@ -155,7 +159,6 @@ export const Sidebar = ({ isOpen, onClose }) => {
               const salesActivityTabs = ['visits', 'office_work', 'orders'];
               const isActive =
                 activeTab === item.id ||
-                (activeTab.startsWith('dashboard') && item.id.startsWith('dashboard')) ||
                 (item.id === 'visits' && salesActivityTabs.includes(activeTab));
               return (
                 <button

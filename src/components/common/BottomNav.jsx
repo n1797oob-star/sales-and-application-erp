@@ -20,7 +20,6 @@ export const BottomNav = ({ onOpenSidebar }) => {
   };
 
   const getNavs = () => {
-    const role = currentUser?.role;
     const dashId = getDashboardId();
     if (role === ROLES.SALES_ENGINEER) {
       return [

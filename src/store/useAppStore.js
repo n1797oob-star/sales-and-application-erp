@@ -31,16 +31,16 @@ const mergeById = (cloudArr = [], localArr = []) => {
   return Array.from(map.values());
 };
 
-// Merge users by email (deduplication) — keeps Supabase UUID as primary ID when available
+// Merge users by email (deduplication) - keeps Supabase UUID as primary ID when available
 const mergeUsersByEmail = (arrA = [], arrB = []) => {
   const emailMap = new Map();
-  // arrA first (lower priority — seed/old data)
+  // arrA first (lower priority - seed/old data)
   (arrA || []).forEach((u) => {
     if (!u || !u.email) return;
     const key = u.email.toLowerCase();
     if (!emailMap.has(key)) emailMap.set(key, { ...u });
   });
-  // arrB second (higher priority — Supabase/new data)
+  // arrB second (higher priority - Supabase/new data)
   (arrB || []).forEach((u) => {
     if (!u || !u.email) return;
     const key = u.email.toLowerCase();
@@ -57,6 +57,39 @@ const mergeUsersByEmail = (arrA = [], arrB = []) => {
   return Array.from(emailMap.values());
 };
 
+// Determine accurate user role without stripping admin privileges or confusing roles
+const determineUserRole = (email = '', metaRole, profileRole, existingRole) => {
+  const cleanEmail = (email || '').toLowerCase().trim();
+  if (profileRole) return normalizeRole(profileRole);
+  if (metaRole) return normalizeRole(metaRole);
+  if (existingRole) {
+    const norm = normalizeRole(existingRole);
+    if (norm === ROLES.ADMIN) {
+      if (cleanEmail.includes('admin') || cleanEmail === 'admin@tmi-erp.com') return ROLES.ADMIN;
+      return ROLES.APPLICATION_ENGINEER;
+    }
+    return norm;
+  }
+  if (cleanEmail.includes('admin') || cleanEmail === 'admin@tmi-erp.com') return ROLES.ADMIN;
+  return ROLES.APPLICATION_ENGINEER;
+};
+
+const getDepartmentForRole = (role, customDept) => {
+  if (customDept && customDept.trim()) return customDept;
+  const norm = normalizeRole(role);
+  if (norm === ROLES.APPLICATION_ENGINEER) return 'Application Engineering';
+  if (norm === ROLES.SALES_ENGINEER) return 'Sales & Marketing';
+  if (norm === ROLES.MANAGER) return 'Sales & Applications Management';
+  return 'Executive Board';
+};
+
+const getDefaultTabForRole = (role) => {
+  const norm = normalizeRole(role);
+  if (norm === ROLES.SALES_ENGINEER) return 'dashboard_se';
+  if (norm === ROLES.APPLICATION_ENGINEER) return 'dashboard_ae';
+  return 'dashboard';
+};
+
 // Push universal state to Supabase so all laptops see the exact same data without overwriting each other
 const pushToCloud = async (state) => {
   if (!isSupabaseConfigured) return;
@@ -69,7 +102,7 @@ const pushToCloud = async (state) => {
       .single();
 
     if (fetchErr && (fetchErr.code === '42P01' || fetchErr.message?.includes('relation "erp_shared_data" does not exist'))) {
-      console.warn('⚠️ Supabase table "erp_shared_data" does not exist yet. Please run supabase_setup.sql in your Supabase SQL editor.');
+      console.warn('[WARN] Supabase table "erp_shared_data" does not exist yet. Please run supabase_setup.sql in your Supabase SQL editor.');
       useAppStore.setState({ cloudSyncStatus: 'table_missing' });
       return;
     }
@@ -84,7 +117,7 @@ const pushToCloud = async (state) => {
     const mergedOrders = mergeById(cloudData.orders, state.orders);
     const mergedCustomers = mergeById(cloudData.customers, state.customers);
     const mergedProducts = mergeById(cloudData.products, state.products);
-    const mergedUsers = mergeById(cloudData.users, state.users);
+    const mergedUsers = mergeUsersByEmail(cloudData.users, state.users);
 
     const payload = {
       users: mergedUsers,
@@ -236,24 +269,8 @@ export const useAppStore = create(
 
             let matchedUser = get().users.find((u) => u.email?.toLowerCase() === email);
 
-            // NEVER default an arbitrary non-admin user to ROLES.ADMIN!
-            let rawRole =
-              metaRole ||
-              (matchedUser?.role && normalizeRole(matchedUser.role) !== ROLES.ADMIN ? matchedUser.role : null) ||
-              (email === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
-
-            if (email !== 'admin@tmi-erp.com' && normalizeRole(rawRole) === ROLES.ADMIN) {
-              rawRole = metaRole || ROLES.APPLICATION_ENGINEER;
-            }
-
-            const resolvedRole = normalizeRole(rawRole);
-
-            const defaultDept =
-              resolvedRole === ROLES.APPLICATION_ENGINEER
-                ? 'Application Engineering'
-                : resolvedRole === ROLES.SALES_ENGINEER
-                ? 'Sales & Marketing'
-                : 'Executive Board';
+            const resolvedRole = determineUserRole(email, metaRole, null, matchedUser?.role);
+            const defaultDept = getDepartmentForRole(resolvedRole, matchedUser?.department || metaDept);
 
             const userObj = {
               id: session.user.id,
@@ -262,21 +279,19 @@ export const useAppStore = create(
               role: resolvedRole,
               avatar: matchedUser?.avatar || session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
               gender: matchedUser?.gender || session.user.user_metadata?.gender || 'Male',
-              department: matchedUser?.department || metaDept || defaultDept,
+              department: defaultDept,
               territory: matchedUser?.territory || session.user.user_metadata?.territory || 'Pan-India',
               phone: matchedUser?.phone || session.user.user_metadata?.phone || '',
               status: 'Active',
             };
 
-            let defaultTab = 'dashboard';
-            if (userObj.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
-            if (userObj.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
+            const defaultTab = getDefaultTabForRole(userObj.role);
 
             set((state) => ({
               currentUser: userObj,
               isAuthenticated: true,
               activeTab: state.activeTab === 'dashboard' ? defaultTab : state.activeTab,
-              users: [userObj, ...state.users.filter((u) => u.email?.toLowerCase() !== email && u.id !== userObj.id)],
+              users: mergeUsersByEmail(state.users, [userObj]),
             }));
           }
 
@@ -290,23 +305,8 @@ export const useAppStore = create(
 
               let matchedUser = get().users.find((u) => u.email?.toLowerCase() === email);
 
-              let rawRole =
-                metaRole ||
-                (matchedUser?.role && normalizeRole(matchedUser.role) !== ROLES.ADMIN ? matchedUser.role : null) ||
-                (email === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
-
-              if (email !== 'admin@tmi-erp.com' && normalizeRole(rawRole) === ROLES.ADMIN) {
-                rawRole = metaRole || ROLES.APPLICATION_ENGINEER;
-              }
-
-              const resolvedRole = normalizeRole(rawRole);
-
-              const defaultDept =
-                resolvedRole === ROLES.APPLICATION_ENGINEER
-                  ? 'Application Engineering'
-                  : resolvedRole === ROLES.SALES_ENGINEER
-                  ? 'Sales & Marketing'
-                  : 'Executive Board';
+              const resolvedRole = determineUserRole(email, metaRole, null, matchedUser?.role);
+              const defaultDept = getDepartmentForRole(resolvedRole, matchedUser?.department || metaDept);
 
               const userObj = {
                 id: session.user.id,
@@ -315,21 +315,19 @@ export const useAppStore = create(
                 role: resolvedRole,
                 avatar: matchedUser?.avatar || session.user.user_metadata?.avatar_url || AVATAR_PRESETS.Male[0],
                 gender: matchedUser?.gender || session.user.user_metadata?.gender || 'Male',
-                department: matchedUser?.department || metaDept || defaultDept,
+                department: defaultDept,
                 territory: matchedUser?.territory || session.user.user_metadata?.territory || 'Pan-India',
                 phone: matchedUser?.phone || session.user.user_metadata?.phone || '',
                 status: 'Active',
               };
 
-              let defaultTab = 'dashboard';
-              if (userObj.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
-              if (userObj.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
+              const defaultTab = getDefaultTabForRole(userObj.role);
 
               set((state) => ({
                 currentUser: userObj,
                 isAuthenticated: true,
                 activeTab: state.activeTab === 'dashboard' ? defaultTab : state.activeTab,
-                users: [userObj, ...state.users.filter((u) => u.email?.toLowerCase() !== email && u.id !== userObj.id)],
+                users: mergeUsersByEmail(state.users, [userObj]),
               }));
             } else if (event === 'SIGNED_OUT') {
               set({ currentUser: null, isAuthenticated: false, activeTab: 'dashboard' });
@@ -348,18 +346,21 @@ export const useAppStore = create(
           const { data: profiles, error: pError } = await supabase.from('profiles').select('*');
           if (!pError && Array.isArray(profiles) && profiles.length > 0) {
             set((state) => {
-              const profilesFormatted = profiles.map((p) => ({
-                id: p.id,
-                name: p.name || 'User',
-                email: (p.email || '').toLowerCase(),
-                role: p.role || ROLES.APPLICATION_ENGINEER,
-                avatar: p.avatar || AVATAR_PRESETS.Male[0],
-                gender: p.gender || 'Male',
-                department: p.department || (p.role === ROLES.APPLICATION_ENGINEER ? 'Application Engineering' : 'Sales Engineering'),
-                territory: p.territory || 'Pan-India',
-                status: p.status || 'Active',
-                password: 'password123',
-              }));
+              const profilesFormatted = profiles.map((p) => {
+                const normRole = determineUserRole(p.email, null, p.role, null);
+                return {
+                  id: p.id,
+                  name: p.name || 'User',
+                  email: (p.email || '').toLowerCase(),
+                  role: normRole,
+                  avatar: p.avatar || AVATAR_PRESETS.Male[0],
+                  gender: p.gender || 'Male',
+                  department: getDepartmentForRole(normRole, p.department),
+                  territory: p.territory || 'Pan-India',
+                  status: p.status || 'Active',
+                  password: 'password123',
+                };
+              });
               // Deduplicate: merge local users with cloud profiles by email
               const mergedUsers = mergeUsersByEmail(state.users, profilesFormatted);
               return { users: mergedUsers };
@@ -385,7 +386,7 @@ export const useAppStore = create(
           if (data?.data) {
             const cloud = data.data;
             set((state) => ({
-              users: mergeById(cloud.users, state.users),
+              users: mergeUsersByEmail(state.users, cloud.users),
               customers: mergeById(cloud.customers, state.customers),
               products: mergeById(cloud.products, state.products),
               visits: mergeById(cloud.visits, state.visits),
@@ -418,6 +419,14 @@ export const useAppStore = create(
         // 1. Try Supabase Auth first if configured
         if (isSupabaseConfigured) {
           try {
+            // Sign out any other stale session first if different user
+            const { data: sessData } = await supabase.auth.getSession();
+            if (sessData?.session?.user?.email && sessData.session.user.email.toLowerCase() !== cleanEmail) {
+              await supabase.auth.signOut();
+            }
+          } catch (e) {}
+
+          try {
             const { data, error } = await supabase.auth.signInWithPassword({
               email: cleanEmail,
               password: cleanPassword,
@@ -449,26 +458,17 @@ export const useAppStore = create(
 
               let existingUser = get().users.find((u) => u.email?.toLowerCase() === cleanEmail);
 
-              // Accurately determine role - NEVER default an engineer to Admin!
-              let rawRole =
-                profile?.role ||
-                metaRole ||
-                (existingUser?.role && normalizeRole(existingUser.role) !== ROLES.ADMIN ? existingUser.role : null) ||
-                (cleanEmail === 'admin@tmi-erp.com' ? ROLES.ADMIN : ROLES.APPLICATION_ENGINEER);
+              const resolvedRole = determineUserRole(
+                cleanEmail,
+                metaRole,
+                profile?.role,
+                existingUser?.role
+              );
 
-              // If cleanEmail is NOT admin@tmi-erp.com and was mistakenly saved as ADMIN, repair it
-              if (cleanEmail !== 'admin@tmi-erp.com' && normalizeRole(rawRole) === ROLES.ADMIN) {
-                rawRole = metaRole || ROLES.APPLICATION_ENGINEER;
-              }
-
-              const resolvedRole = normalizeRole(rawRole);
-
-              const defaultDept =
-                resolvedRole === ROLES.APPLICATION_ENGINEER
-                  ? 'Application Engineering'
-                  : resolvedRole === ROLES.SALES_ENGINEER
-                  ? 'Sales & Marketing'
-                  : 'Executive Board';
+              const defaultDept = getDepartmentForRole(
+                resolvedRole,
+                profile?.department || metaDept || existingUser?.department
+              );
 
               const user = {
                 id: authUser.id,
@@ -477,15 +477,13 @@ export const useAppStore = create(
                 role: resolvedRole,
                 avatar: profile?.avatar || metaAvatar || existingUser?.avatar || AVATAR_PRESETS.Male[0],
                 gender: profile?.gender || metaGender || existingUser?.gender || 'Male',
-                department: profile?.department || metaDept || existingUser?.department || defaultDept,
+                department: defaultDept,
                 territory: profile?.territory || metaTerritory || existingUser?.territory || 'Pan-India',
                 phone: profile?.phone || metaPhone || existingUser?.phone || '',
                 status: 'Active',
               };
 
-              let defaultTab = 'dashboard';
-              if (user.role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
-              if (user.role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
+              const defaultTab = getDefaultTabForRole(user.role);
 
               // Collect all old local IDs this email previously used (timestamp IDs like u-17290xxx)
               const oldIds = new Set();
@@ -518,7 +516,7 @@ export const useAppStore = create(
                   officeWorks: fixedOfficeWorks,
                   orders: fixedOrders,
                   kraActivities: fixedKras,
-                  // Deduplicate users by email � remove old entries for same email
+                  // Deduplicate users by email - remove old entries for same email
                   users: mergeUsersByEmail(
                     state.users.filter((u) => u.email?.toLowerCase() !== cleanEmail),
                     [user]
@@ -548,16 +546,22 @@ export const useAppStore = create(
         }
 
         if (found) {
-          // If non-admin user was previously corrupted into ADMIN, repair it
-          let role = normalizeRole(found.role);
-          if (found.email.toLowerCase() !== 'admin@tmi-erp.com' && role === ROLES.ADMIN) {
-            role = ROLES.APPLICATION_ENGINEER;
+          // If stale cloud session exists, clear it so it doesn't overwrite local session
+          if (isSupabaseConfigured) {
+            try {
+              await supabase.auth.signOut();
+            } catch (e) {}
           }
-          found = { ...found, role };
 
-          let defaultTab = 'dashboard';
-          if (role === ROLES.SALES_ENGINEER) defaultTab = 'dashboard_se';
-          if (role === ROLES.APPLICATION_ENGINEER) defaultTab = 'dashboard_ae';
+          const resolvedRole = determineUserRole(
+            cleanEmail,
+            null,
+            null,
+            found.role
+          );
+          found = { ...found, role: resolvedRole };
+
+          const defaultTab = getDefaultTabForRole(resolvedRole);
 
           set({ currentUser: found, isAuthenticated: true, activeTab: defaultTab });
           get().syncFromCloud();
@@ -950,7 +954,7 @@ export const useAppStore = create(
           action: 'Booked Purchase Order',
           entityType: 'Order',
           entityId: newOrder.id,
-          details: `PO #${newOrder.poNumber} booked for ₹${newOrder.orderValue}.`,
+          details: `PO #${newOrder.poNumber} booked for Rs.${newOrder.orderValue}.`,
         };
 
         // Automatically reflect in Lead Pipeline
@@ -1166,6 +1170,53 @@ export const useAppStore = create(
         }));
       },
 
+      // Initialize Fresh Production System (clears sample data, keeps admin user)
+      initializeFreshProductionSystem: () => {
+        const currentAdmin = get().currentUser || INITIAL_USERS[0];
+        const freshAdmin = {
+          ...currentAdmin,
+          role: ROLES.ADMIN,
+        };
+
+        const freshState = {
+          users: [freshAdmin],
+          customers: [],
+          products: [],
+          visits: [],
+          officeWorks: [],
+          kraActivities: [],
+          tasks: [],
+          orders: [],
+          notifications: [
+            {
+              id: `notif-${Date.now()}`,
+              timestamp: new Date().toISOString(),
+              title: 'Production ERP Initialized',
+              message: 'System has been initialized for fresh production use. All demo records cleared.',
+              read: false,
+              type: 'system',
+            },
+          ],
+          activityLogs: [
+            {
+              id: `log-${Date.now()}`,
+              timestamp: new Date().toISOString(),
+              userId: freshAdmin.id,
+              userName: freshAdmin.name,
+              userRole: ROLES.ADMIN,
+              action: 'Initialized Fresh Production ERP',
+              entityType: 'System',
+              entityId: 'root',
+              details: 'Cleared all demo data and initialized clean production database.',
+            },
+          ],
+          activeTab: 'dashboard',
+        };
+
+        set(freshState);
+        pushToCloud(get());
+      },
+
       // Reset System to Seed Data
       resetToSeedData: () => {
         set({
@@ -1179,6 +1230,7 @@ export const useAppStore = create(
           orders: INITIAL_ORDERS || [],
           notifications: INITIAL_NOTIFICATIONS,
           activityLogs: INITIAL_ACTIVITY_LOGS,
+          activeTab: 'dashboard',
         });
         pushToCloud(get());
       },
