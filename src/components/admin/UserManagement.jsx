@@ -54,13 +54,16 @@ export const UserManagement = () => {
     status: 'Active',
   });
 
-  const filteredUsers = users.filter(
-    (u) =>
-      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.role.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.department.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredUsers = (users || []).filter((u) => {
+    if (!u) return false;
+    const q = String(searchTerm || '').toLowerCase().trim();
+    if (!q) return true;
+    const name = String(u.name || '').toLowerCase();
+    const email = String(u.email || '').toLowerCase();
+    const role = String(u.role || '').toLowerCase();
+    const dept = String(u.department || '').toLowerCase();
+    return name.includes(q) || email.includes(q) || role.includes(q) || dept.includes(q);
+  });
 
   const handleGenderChange = (newGender) => {
     const defaultAvatar = AVATAR_PRESETS[newGender] ? AVATAR_PRESETS[newGender][0] : AVATAR_PRESETS.Male[0];

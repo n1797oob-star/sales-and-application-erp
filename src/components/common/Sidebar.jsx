@@ -88,7 +88,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
   ];
 
   const userRole = normalizeRole(currentUser?.role);
-  const isAdmin = userRole === ROLES.ADMIN || currentUser?.email?.toLowerCase().includes('admin');
+  const isAdmin = userRole === ROLES.ADMIN || String(currentUser?.email || '').toLowerCase().includes('admin');
 
   let visibleItems = navItems.filter((item) => {
     // Admin has access to all management modules (KRA, visits, tasks, users, masters, reports)

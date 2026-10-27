@@ -39,22 +39,24 @@ const mergeById = (cloudArr = [], localArr = [], deletedSet = new Set()) => {
 const mergeUsersByEmail = (arrA = [], arrB = [], deletedSet = new Set()) => {
   const emailMap = new Map();
   (arrA || []).forEach((u) => {
-    if (!u || !u.email) return;
-    const key = u.email.toLowerCase();
+    if (!u) return;
+    const key = String(u.email || '').toLowerCase().trim();
+    if (!key) return;
     if (deletedSet.has(key) || (u.id && deletedSet.has(u.id))) return;
-    if (!emailMap.has(key)) emailMap.set(key, { ...u });
+    if (!emailMap.has(key)) emailMap.set(key, { ...u, email: key });
   });
   (arrB || []).forEach((u) => {
-    if (!u || !u.email) return;
-    const key = u.email.toLowerCase();
+    if (!u) return;
+    const key = String(u.email || '').toLowerCase().trim();
+    if (!key) return;
     if (deletedSet.has(key) || (u.id && deletedSet.has(u.id))) return;
     if (emailMap.has(key)) {
       const existing = emailMap.get(key);
       const betterID =
         existing.id && existing.id.length > 20 ? existing.id : (u.id && u.id.length > 20 ? u.id : existing.id || u.id);
-      emailMap.set(key, { ...existing, ...u, id: betterID });
+      emailMap.set(key, { ...existing, ...u, id: betterID, email: key });
     } else {
-      emailMap.set(key, { ...u });
+      emailMap.set(key, { ...u, email: key });
     }
   });
   return Array.from(emailMap.values());
@@ -299,7 +301,7 @@ export const useAppStore = create(
             const metaName = session.user.user_metadata?.full_name;
             const metaDept = session.user.user_metadata?.department;
 
-            let matchedUser = get().users.find((u) => u.email?.toLowerCase() === email);
+            let matchedUser = (get().users || []).find((u) => String(u?.email || '').toLowerCase().trim() === email);
 
             const resolvedRole = determineUserRole(
               email,
@@ -341,7 +343,7 @@ export const useAppStore = create(
               const metaName = session.user.user_metadata?.full_name;
               const metaDept = session.user.user_metadata?.department;
 
-              let matchedUser = get().users.find((u) => u.email?.toLowerCase() === email);
+              let matchedUser = (get().users || []).find((u) => String(u?.email || '').toLowerCase().trim() === email);
 
               const resolvedRole = determineUserRole(
                 email,
@@ -507,7 +509,7 @@ export const useAppStore = create(
               const metaTerritory = authUser.user_metadata?.territory;
               const metaPhone = authUser.user_metadata?.phone;
 
-              let existingUser = get().users.find((u) => u.email?.toLowerCase() === cleanEmail);
+              let existingUser = (get().users || []).find((u) => String(u?.email || '').toLowerCase().trim() === cleanEmail);
 
               const resolvedRole = determineUserRole(
                 cleanEmail,
@@ -539,8 +541,8 @@ export const useAppStore = create(
 
               // Collect all old local IDs this email previously used (timestamp IDs like u-17290xxx)
               const oldIds = new Set();
-              get().users.forEach((u) => {
-                if (u.email?.toLowerCase() === cleanEmail && u.id !== user.id) {
+              (get().users || []).forEach((u) => {
+                if (String(u?.email || '').toLowerCase().trim() === cleanEmail && u.id !== user.id) {
                   oldIds.add(u.id);
                 }
               });
@@ -570,7 +572,7 @@ export const useAppStore = create(
                   kraActivities: fixedKras,
                   // Deduplicate users by email - remove old entries for same email
                   users: mergeUsersByEmail(
-                    state.users.filter((u) => u.email?.toLowerCase() !== cleanEmail),
+                    (state.users || []).filter((u) => String(u?.email || '').toLowerCase().trim() !== cleanEmail),
                     [user]
                   ),
                 };
@@ -585,16 +587,17 @@ export const useAppStore = create(
         }
 
         // 2. Check local/seed users (guarantees Admin@2026!# and admin@tmi-erp.com always work)
-        let found = get().users.find(
+        let found = (get().users || []).find(
           (u) =>
-            u.email.toLowerCase() === cleanEmail &&
+            u &&
+            String(u.email || '').toLowerCase().trim() === cleanEmail &&
             u.password === cleanPassword
         );
 
         // Fallback check for default administrator if users array got altered
         if (!found && cleanEmail === 'admin@tmi-erp.com' && (cleanPassword === 'Admin@2026!#' || cleanPassword === 'admin123')) {
           found = { ...INITIAL_USERS[0], password: cleanPassword };
-          set((state) => ({ users: [found, ...state.users.filter((u) => u.email.toLowerCase() !== cleanEmail)] }));
+          set((state) => ({ users: [found, ...(state.users || []).filter((u) => String(u?.email || '').toLowerCase().trim() !== cleanEmail)] }));
         }
 
         if (found) {
@@ -638,7 +641,7 @@ export const useAppStore = create(
         }
 
         // 4. Check against INITIAL_USERS admin password
-        const adminSeed = INITIAL_USERS.find((u) => u.email?.toLowerCase() === 'admin@tmi-erp.com');
+        const adminSeed = INITIAL_USERS.find((u) => String(u?.email || '').toLowerCase().trim() === 'admin@tmi-erp.com');
         if (adminSeed && adminSeed.password === clean) return true;
 
         return false;
@@ -741,7 +744,7 @@ export const useAppStore = create(
         );
 
         set((state) => ({
-          users: [newUser, ...state.users.filter((u) => u.email.toLowerCase() !== cleanEmail)],
+          users: [newUser, ...(state.users || []).filter((u) => String(u?.email || '').toLowerCase().trim() !== cleanEmail)],
           deletedIds: updatedDeletedIds,
           activityLogs: [newLog, ...state.activityLogs],
         }));
@@ -776,14 +779,14 @@ export const useAppStore = create(
       },
 
       deleteUser: async (id) => {
-        const target = get().users.find((u) => u.id === id);
+        const target = (get().users || []).find((u) => u?.id === id);
         if (!target) return { success: false, error: 'User not found.' };
 
-        if (target.email?.toLowerCase() === 'admin@tmi-erp.com') {
+        if (String(target.email || '').toLowerCase().trim() === 'admin@tmi-erp.com') {
           return { success: false, error: 'Cannot delete the Primary System Administrator.' };
         }
 
-        const targetEmail = (target.email || '').toLowerCase();
+        const targetEmail = String(target.email || '').toLowerCase().trim();
         const deletedSet = new Set(get().deletedIds || []);
         deletedSet.add(id);
         if (targetEmail) deletedSet.add(targetEmail);
@@ -814,7 +817,9 @@ export const useAppStore = create(
         };
 
         set((state) => ({
-          users: state.users.filter((u) => u.id !== id && u.email?.toLowerCase() !== targetEmail),
+          users: (state.users || []).filter(
+            (u) => u?.id !== id && (!targetEmail || String(u?.email || '').toLowerCase().trim() !== targetEmail)
+          ),
           deletedIds: newDeletedIds,
           activityLogs: [newLog, ...state.activityLogs],
         }));

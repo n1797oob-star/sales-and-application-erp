@@ -21,12 +21,15 @@ export const CustomerMaster = () => {
     taxId: '',
   });
 
-  const filtered = customers.filter(
-    (c) =>
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.industry.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.contactPerson.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filtered = (customers || []).filter((c) => {
+    if (!c) return false;
+    const q = String(searchTerm || '').toLowerCase().trim();
+    if (!q) return true;
+    const name = String(c.name || '').toLowerCase();
+    const industry = String(c.industry || '').toLowerCase();
+    const contact = String(c.contactPerson || '').toLowerCase();
+    return name.includes(q) || industry.includes(q) || contact.includes(q);
+  });
 
   const resetForm = () => {
     setFormData({

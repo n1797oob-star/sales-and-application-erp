@@ -19,12 +19,15 @@ export const ProductMaster = () => {
     brochureUrl: '#',
   });
 
-  const filtered = products.filter(
-    (p) =>
-      p.modelNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filtered = (products || []).filter((p) => {
+    if (!p) return false;
+    const q = String(searchTerm || '').toLowerCase().trim();
+    if (!q) return true;
+    const model = String(p.modelNumber || '').toLowerCase();
+    const name = String(p.name || '').toLowerCase();
+    const cat = String(p.category || '').toLowerCase();
+    return model.includes(q) || name.includes(q) || cat.includes(q);
+  });
 
   const resetForm = () => {
     setFormData({

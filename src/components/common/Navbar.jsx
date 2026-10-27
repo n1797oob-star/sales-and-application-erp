@@ -349,7 +349,7 @@ export const Navbar = ({ onToggleSidebar }) => {
                     <span>Cloud Database &amp; Sync</span>
                   </button>
 
-                  {(normalizeRole(currentUser?.role) === ROLES.ADMIN || currentUser?.email?.toLowerCase().includes('admin')) && (
+                  {(normalizeRole(currentUser?.role) === ROLES.ADMIN || String(currentUser?.email || '').toLowerCase().includes('admin')) && (
                     <>
                       <button
                         onClick={() => {

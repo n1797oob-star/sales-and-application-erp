@@ -94,8 +94,9 @@ export const filterVisits = (visits, filters = {}, currentUser = null, customers
   const currentUserIds = new Set();
   if (currentUser?.id) currentUserIds.add(currentUser.id);
   if (currentUser?.email) {
-    users.forEach((u) => {
-      if (u.email?.toLowerCase() === currentUser.email?.toLowerCase() && u.id) {
+    const curEmail = String(currentUser.email).toLowerCase().trim();
+    (users || []).forEach((u) => {
+      if (u && u.id && String(u.email || '').toLowerCase().trim() === curEmail) {
         currentUserIds.add(u.id);
       }
     });
@@ -150,8 +151,9 @@ export const filterOfficeWorks = (works, filters = {}, currentUser = null, custo
   const currentUserIds = new Set();
   if (currentUser?.id) currentUserIds.add(currentUser.id);
   if (currentUser?.email) {
-    users.forEach((u) => {
-      if (u.email?.toLowerCase() === currentUser.email?.toLowerCase() && u.id) {
+    const curEmail = String(currentUser.email).toLowerCase().trim();
+    (users || []).forEach((u) => {
+      if (u && u.id && String(u.email || '').toLowerCase().trim() === curEmail) {
         currentUserIds.add(u.id);
       }
     });
@@ -194,8 +196,9 @@ export const filterKras = (kras, filters = {}, currentUser = null, customers = [
   const currentUserIds = new Set();
   if (currentUser?.id) currentUserIds.add(currentUser.id);
   if (currentUser?.email) {
-    users.forEach((u) => {
-      if (u.email?.toLowerCase() === currentUser.email?.toLowerCase() && u.id) {
+    const curEmail = String(currentUser.email).toLowerCase().trim();
+    (users || []).forEach((u) => {
+      if (u && u.id && String(u.email || '').toLowerCase().trim() === curEmail) {
         currentUserIds.add(u.id);
       }
     });
@@ -287,8 +290,9 @@ export const filterOrders = (orders, filters = {}, currentUser = null, customers
   const currentUserIds = new Set();
   if (currentUser?.id) currentUserIds.add(currentUser.id);
   if (currentUser?.email) {
-    users.forEach((u) => {
-      if (u.email?.toLowerCase() === currentUser.email?.toLowerCase() && u.id) {
+    const curEmail = String(currentUser.email).toLowerCase().trim();
+    (users || []).forEach((u) => {
+      if (u && u.id && String(u.email || '').toLowerCase().trim() === curEmail) {
         currentUserIds.add(u.id);
       }
     });
