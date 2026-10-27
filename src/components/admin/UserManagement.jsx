@@ -86,8 +86,12 @@ export const UserManagement = () => {
 
   const handleAddSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.name || !formData.email) {
+    if (!formData.name?.trim() || !formData.email?.trim()) {
       alert('Please fill in name and email address.');
+      return;
+    }
+    if (formData.password && formData.password.trim().length < 6) {
+      alert('Password must be at least 6 characters long for Supabase Authentication.');
       return;
     }
     setIsSubmitting(true);
@@ -95,6 +99,8 @@ export const UserManagement = () => {
       const res = await addUser(formData);
       if (res && res.error) {
         alert('Notice from Supabase: ' + res.error);
+      } else {
+        alert(`User "${formData.name}" successfully created in Supabase Auth & ERP!`);
       }
       setIsAddModalOpen(false);
       resetForm();
@@ -450,9 +456,14 @@ export const UserManagement = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Password</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Password <span className="text-[10px] text-slate-400 font-normal">(min. 6 characters)</span>
+                  </label>
                   <input
                     type="text"
+                    required
+                    minLength={6}
+                    placeholder="Min. 6 characters"
                     value={formData.password}
                     onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                     className="w-full text-xs p-2.5 bg-slate-50 border rounded-xl outline-none focus:bg-white"

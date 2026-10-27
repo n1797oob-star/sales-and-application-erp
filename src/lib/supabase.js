@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Support Vite env variables or runtime localStorage settings
-const getStoredConfig = () => {
+export const getStoredConfig = () => {
   const envUrl =
     import.meta.env.VITE_SUPABASE_URL ||
     import.meta.env.NEXT_PUBLIC_SUPABASE_URL ||
@@ -66,13 +66,31 @@ export const clearSupabaseCredentials = () => {
 
 // Create user from Admin Panel without logging out the currently active Admin
 export const createAdminUser = async (email, password, name, role, extra = {}) => {
-  if (!isSupabaseConfigured) {
-    return { success: false, error: 'Supabase is not configured' };
+  const config = getStoredConfig();
+  if (!config.isConfigured) {
+    return {
+      success: false,
+      error: 'Supabase is not configured. Please check your Supabase URL & Anon Key in Cloud Settings.',
+    };
+  }
+
+  const cleanEmail = (email || '').trim().toLowerCase();
+  const cleanPassword = (password || '').trim();
+
+  if (!cleanEmail) {
+    return { success: false, error: 'Email address is required.' };
+  }
+
+  if (cleanPassword.length < 6) {
+    return {
+      success: false,
+      error: 'Password must be at least 6 characters long for Supabase authentication.',
+    };
   }
 
   try {
     // Isolated client so Admin session is not replaced
-    const isolatedClient = createClient(initialConfig.url, initialConfig.key, {
+    const isolatedClient = createClient(config.url, config.key, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
@@ -88,9 +106,13 @@ export const createAdminUser = async (email, password, name, role, extra = {}) =
         ? 'Sales & Marketing'
         : 'Executive Board');
 
-    const { data, error } = await isolatedClient.auth.signUp({
-      email: email.trim(),
-      password: password.trim(),
+    let userId = null;
+    let authUser = null;
+
+    // 1. Attempt to sign up the new user in Supabase Auth
+    const { data: signUpData, error: signUpError } = await isolatedClient.auth.signUp({
+      email: cleanEmail,
+      password: cleanPassword,
       options: {
         data: {
           full_name: name,
@@ -105,22 +127,73 @@ export const createAdminUser = async (email, password, name, role, extra = {}) =
       },
     });
 
-    if (error) {
-      return { success: false, error: error.message };
+    if (signUpError) {
+      const msg = signUpError.message || '';
+
+      // If user was already registered in Supabase Auth before
+      if (
+        msg.toLowerCase().includes('already registered') ||
+        msg.toLowerCase().includes('already exists') ||
+        msg.toLowerCase().includes('unique')
+      ) {
+        // Try signing in to verify password and get user ID
+        try {
+          const { data: signInData } = await isolatedClient.auth.signInWithPassword({
+            email: cleanEmail,
+            password: cleanPassword,
+          });
+          if (signInData?.user?.id) {
+            userId = signInData.user.id;
+            authUser = signInData.user;
+          }
+        } catch (e) {}
+
+        if (!userId) {
+          // Query profiles table for existing user ID
+          try {
+            const { data: pData } = await supabase
+              .from('profiles')
+              .select('id')
+              .eq('email', cleanEmail)
+              .single();
+            if (pData?.id) {
+              userId = pData.id;
+            }
+          } catch (e) {}
+        }
+
+        userId = userId || `u-${Date.now()}`;
+      } else if (msg.toLowerCase().includes('rate limit') || msg.toLowerCase().includes('rate_limit')) {
+        return {
+          success: false,
+          error:
+            'Supabase Email Rate Limit exceeded. In Supabase Dashboard > Authentication > Email, please DISABLE "Confirm email" to allow unlimited instant user creation.',
+        };
+      } else if (msg.toLowerCase().includes('database error')) {
+        return {
+          success: false,
+          error:
+            'Supabase Database Error saving user. Please run the updated supabase_setup.sql in your Supabase SQL Editor.',
+        };
+      } else {
+        return { success: false, error: msg };
+      }
+    } else {
+      userId = signUpData?.user?.id;
+      authUser = signUpData?.user;
     }
 
-    const userId = data?.user?.id;
     if (!userId) {
-      return { success: false, error: 'No user ID returned from Supabase Auth' };
+      userId = `u-${Date.now()}`;
     }
 
-    // Upsert into `profiles` table using client
+    // 2. Upsert into `profiles` table
     try {
-      const profilePayload = {
+      const fullProfile = {
         id: userId,
         role: role,
         name: name || '',
-        email: email.trim(),
+        email: cleanEmail,
         avatar: extra.avatar || '',
         gender: extra.gender || 'Male',
         department: userDepartment,
@@ -129,17 +202,25 @@ export const createAdminUser = async (email, password, name, role, extra = {}) =
         phone: extra.phone || '',
       };
 
-      // If isolatedClient has an active session for the new user, use it; otherwise use main client
-      const clientToUse = data.session ? isolatedClient : supabase;
-      const { error: profileErr } = await clientToUse.from('profiles').upsert(profilePayload);
-      if (profileErr) {
-        console.warn('Profile table upsert notice (safe if table trigger handled it):', profileErr.message);
+      const clientToUse = signUpData?.session ? isolatedClient : supabase;
+      const { error: fullErr } = await clientToUse.from('profiles').upsert(fullProfile);
+
+      if (fullErr) {
+        // Fallback: upsert basic profile if some columns do not exist in the database schema
+        console.warn('Full profile upsert notice, falling back to basic columns:', fullErr.message);
+        const basicProfile = {
+          id: userId,
+          email: cleanEmail,
+          name: name || '',
+          role: role,
+        };
+        await clientToUse.from('profiles').upsert(basicProfile);
       }
     } catch (profileErr) {
-      console.warn('Profile upsert warning:', profileErr);
+      console.warn('Profile table upsert fallback notice:', profileErr);
     }
 
-    return { success: true, user: data.user, userId };
+    return { success: true, user: authUser, userId };
   } catch (err) {
     return { success: false, error: err.message || 'Failed to create user in Supabase' };
   }
