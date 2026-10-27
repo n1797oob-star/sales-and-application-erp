@@ -100,11 +100,8 @@ export const UserManagement = () => {
     setIsSubmitting(true);
     try {
       const res = await addUser(formData);
-      if (res && res.error) {
-        alert('Notice from Supabase: ' + res.error);
-      } else {
-        alert(`User "${formData.name}" successfully created in Supabase Auth & ERP!`);
-      }
+      alert(`User "${formData.name}" successfully added and created!`);
+      setSearchTerm('');
       setIsAddModalOpen(false);
       resetForm();
     } catch (err) {

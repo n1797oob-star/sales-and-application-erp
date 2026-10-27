@@ -119,6 +119,20 @@ const pushToCloud = async (state, options = {}) => {
       (cloudData.deletedIds || []).forEach((d) => deletedSet.add(d));
     }
 
+    // Active local items must NEVER be in deletedSet! If an item was previously deleted
+    // but was just re-added or restored in state, remove it from deletedSet so it is not filtered out!
+    (state.users || []).forEach((u) => {
+      if (u?.id) deletedSet.delete(u.id);
+      if (u?.email) deletedSet.delete(String(u.email).toLowerCase().trim());
+    });
+    (state.customers || []).forEach((c) => c?.id && deletedSet.delete(c.id));
+    (state.products || []).forEach((p) => p?.id && deletedSet.delete(p.id));
+    (state.visits || []).forEach((v) => v?.id && deletedSet.delete(v.id));
+    (state.officeWorks || []).forEach((w) => w?.id && deletedSet.delete(w.id));
+    (state.kraActivities || []).forEach((k) => k?.id && deletedSet.delete(k.id));
+    (state.tasks || []).forEach((t) => t?.id && deletedSet.delete(t.id));
+    (state.orders || []).forEach((o) => o?.id && deletedSet.delete(o.id));
+
     const mergedDeletedIds = Array.from(deletedSet);
 
     // Merge cloud and local data safely, filtering out any deleted items
@@ -437,6 +451,11 @@ export const useAppStore = create(
         if (!isSupabaseConfigured) return;
         try {
           const currentDeleted = new Set(get().deletedIds || []);
+          // Protect active local users from being deleted by tombstones
+          (get().users || []).forEach((u) => {
+            if (u?.id) currentDeleted.delete(u.id);
+            if (u?.email) currentDeleted.delete(String(u.email).toLowerCase().trim());
+          });
 
           // 1. Fetch profiles from Supabase if table exists
           const { data: profiles, error: pError } = await supabase.from('profiles').select('*');
@@ -487,6 +506,13 @@ export const useAppStore = create(
               ...(get().deletedIds || []),
               ...(cloud.deletedIds || []),
             ]);
+
+            // Protect active local items from tombstones
+            (get().users || []).forEach((u) => {
+              if (u?.id) allDeleted.delete(u.id);
+              if (u?.email) allDeleted.delete(String(u.email).toLowerCase().trim());
+            });
+
             set((state) => ({
               deletedIds: Array.from(allDeleted),
               users: mergeUsersByEmail(state.users, cloud.users, allDeleted),

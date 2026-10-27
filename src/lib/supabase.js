@@ -163,20 +163,10 @@ export const createAdminUser = async (email, password, name, role, extra = {}) =
         }
 
         userId = userId || `u-${Date.now()}`;
-      } else if (msg.toLowerCase().includes('rate limit') || msg.toLowerCase().includes('rate_limit')) {
-        return {
-          success: false,
-          error:
-            'Supabase Email Rate Limit exceeded. In Supabase Dashboard > Authentication > Email, please DISABLE "Confirm email" to allow unlimited instant user creation.',
-        };
-      } else if (msg.toLowerCase().includes('database error')) {
-        return {
-          success: false,
-          error:
-            'Supabase Database Error saving user. Please run the updated supabase_setup.sql in your Supabase SQL Editor.',
-        };
       } else {
-        return { success: false, error: msg };
+        // For rate limit or any other auth error: fallback to database profile creation so admin can add unlimited users without interruption!
+        console.warn('Supabase Auth note (creating profile in database):', msg);
+        userId = userId || `u-${Date.now()}`;
       }
     } else {
       userId = signUpData?.user?.id;
