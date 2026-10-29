@@ -200,7 +200,11 @@ BEGIN
     END IF;
   ELSE
     -- Generate new user id and insert into auth.users directly
-    v_user_id := gen_random_uuid();
+    -- Reuse existing profile id (keeps KRA/visit links intact), else generate a new one
+    SELECT id INTO v_user_id FROM public.profiles WHERE lower(email) = p_email LIMIT 1;
+    IF v_user_id IS NULL OR EXISTS (SELECT 1 FROM auth.users WHERE id = v_user_id) THEN
+      v_user_id := gen_random_uuid();
+    END IF;
     v_encrypted_pw := crypt(trim(p_password), gen_salt('bf'));
 
     INSERT INTO auth.users (
@@ -214,7 +218,11 @@ BEGIN
       raw_app_meta_data,
       raw_user_meta_data,
       created_at,
-      updated_at
+      updated_at,
+      confirmation_token,
+      recovery_token,
+      email_change_token_new,
+      email_change
     ) VALUES (
       '00000000-0000-0000-0000-000000000000'::uuid,
       v_user_id,
@@ -234,9 +242,38 @@ BEGIN
         'gender', p_gender
       ),
       now(),
-      now()
+      now(),
+      '',
+      '',
+      '',
+      ''
     );
   END IF;
+
+  -- GoTrue login breaks if these token columns are NULL - normalise them
+  UPDATE auth.users SET
+    confirmation_token     = COALESCE(confirmation_token, ''),
+    recovery_token         = COALESCE(recovery_token, ''),
+    email_change_token_new = COALESCE(email_change_token_new, ''),
+    email_change           = COALESCE(email_change, '')
+  WHERE id = v_user_id;
+
+  -- Email/password login requires an identity row
+  IF NOT EXISTS (SELECT 1 FROM auth.identities WHERE user_id = v_user_id AND provider = 'email') THEN
+    INSERT INTO auth.identities (
+      id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+    ) VALUES (
+      gen_random_uuid(),
+      v_user_id,
+      v_user_id::text,
+      jsonb_build_object('sub', v_user_id::text, 'email', p_email, 'email_verified', true),
+      'email',
+      now(), now(), now()
+    );
+  END IF;
+
+  -- Remove duplicate profile rows for same email with a different id
+  DELETE FROM public.profiles WHERE lower(email) = p_email AND id <> v_user_id;
 
   -- Upsert in public.profiles table
   INSERT INTO public.profiles (
@@ -294,6 +331,35 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION public.admin_delete_user TO authenticated, anon;
+
+
+-- ================================================================
+-- 7. ONE-TIME REPAIR OF EXISTING USERS (safe to re-run)
+--    Confirms all existing users, fixes NULL tokens, adds missing identities,
+--    and syncs passwords saved in profiles into Supabase Auth.
+-- ================================================================
+UPDATE auth.users SET
+  email_confirmed_at     = COALESCE(email_confirmed_at, now()),
+  confirmation_token     = COALESCE(confirmation_token, ''),
+  recovery_token         = COALESCE(recovery_token, ''),
+  email_change_token_new = COALESCE(email_change_token_new, ''),
+  email_change           = COALESCE(email_change, '');
+
+INSERT INTO auth.identities (id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+SELECT gen_random_uuid(), u.id, u.id::text,
+       jsonb_build_object('sub', u.id::text, 'email', u.email, 'email_verified', true),
+       'email', now(), now(), now()
+FROM auth.users u
+WHERE NOT EXISTS (SELECT 1 FROM auth.identities i WHERE i.user_id = u.id AND i.provider = 'email');
+
+-- Re-create Auth accounts for any profile that has a saved password (fixes users added before this fix)
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT * FROM public.profiles WHERE password IS NOT NULL AND length(password) >= 6 LOOP
+    PERFORM public.admin_create_user(r.email, r.password, r.name, r.role, r.department, r.territory, r.phone, r.avatar, r.gender);
+  END LOOP;
+END $$;
 
 
 -- ================================================================

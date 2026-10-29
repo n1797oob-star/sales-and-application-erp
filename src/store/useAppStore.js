@@ -463,6 +463,15 @@ export const useAppStore = create(
 
           // 1. Fetch profiles from Supabase if table exists
           const { data: profiles, error: pError } = await supabase.from('profiles').select('*');
+          // Any user that exists in Supabase profiles is ACTIVE - clear stale tombstones from other PCs
+          const activeProfileKeys = new Set();
+          if (!pError && Array.isArray(profiles)) {
+            profiles.forEach((p) => {
+              if (p?.id) activeProfileKeys.add(p.id);
+              if (p?.email) activeProfileKeys.add(String(p.email).toLowerCase().trim());
+            });
+            activeProfileKeys.forEach((k) => currentDeleted.delete(k));
+          }
           if (!pError && Array.isArray(profiles) && profiles.length > 0) {
             set((state) => {
               const profilesFormatted = profiles
@@ -519,6 +528,7 @@ export const useAppStore = create(
               if (u?.id) allDeleted.delete(u.id);
               if (u?.email) allDeleted.delete(String(u.email).toLowerCase().trim());
             });
+            activeProfileKeys.forEach((k) => allDeleted.delete(k));
 
             set((state) => ({
               deletedIds: Array.from(allDeleted),
@@ -551,6 +561,7 @@ export const useAppStore = create(
       login: async (email, password) => {
         const cleanEmail = (email || '').trim().toLowerCase();
         const cleanPassword = (password || '').trim();
+        let authErrorMsg = '';
 
         // 1. Pre-sync from Supabase cloud so all devices get newly added users immediately
         if (isSupabaseConfigured) {
@@ -666,6 +677,7 @@ export const useAppStore = create(
               await pushToCloud(get());
               return { success: true, user };
             }
+            if (error) authErrorMsg = error.message || '';
           } catch (err) {
             console.debug('Supabase signIn notice:', err);
           }
@@ -678,6 +690,66 @@ export const useAppStore = create(
             String(u.email || '').toLowerCase().trim() === cleanEmail &&
             u.password === cleanPassword
         );
+
+        // 3. Direct cloud lookup (works on a brand-new PC even if local cache is empty/stale)
+        if (!found && isSupabaseConfigured) {
+          try {
+            const { data: pRow } = await supabase
+              .from('profiles')
+              .select('*')
+              .ilike('email', cleanEmail)
+              .maybeSingle();
+            if (pRow && pRow.password && pRow.password === cleanPassword) {
+              const r = determineUserRole(pRow.email, null, pRow.role, null);
+              found = {
+                id: pRow.id,
+                name: pRow.name || cleanEmail.split('@')[0],
+                email: cleanEmail,
+                role: r,
+                avatar: pRow.avatar || AVATAR_PRESETS.Male[0],
+                gender: pRow.gender || 'Male',
+                department: getDepartmentForRole(r, pRow.department),
+                territory: pRow.territory || 'Pan-India',
+                phone: pRow.phone || '',
+                status: pRow.status || 'Active',
+                password: cleanPassword,
+              };
+            }
+          } catch (e) {}
+
+          if (!found) {
+            try {
+              const { data: shared } = await supabase
+                .from('erp_shared_data')
+                .select('data')
+                .eq('id', 'global_data')
+                .single();
+              const cloudUser = (shared?.data?.users || []).find(
+                (u) => u && String(u.email || '').toLowerCase().trim() === cleanEmail && u.password === cleanPassword
+              );
+              if (cloudUser) found = { ...cloudUser, email: cleanEmail };
+            } catch (e) {}
+          }
+
+          // Self-heal: credentials are valid in ERP but Supabase Auth account is missing/unconfirmed.
+          // Provision/repair it so the next login goes through Supabase Auth directly.
+          if (found) {
+            try {
+              await supabase.rpc('admin_create_user', {
+                p_email: cleanEmail,
+                p_password: cleanPassword,
+                p_name: found.name || '',
+                p_role: found.role || 'Application Engineer',
+                p_department: found.department || '',
+                p_territory: found.territory || 'Pan-India',
+                p_phone: found.phone || '',
+                p_avatar: found.avatar || '',
+                p_gender: found.gender || 'Male',
+              });
+            } catch (e) {}
+            set((state) => ({ users: mergeUsersByEmail(state.users, [found]) }));
+          }
+        }
 
         // Fallback check for default administrator if users array got altered
         if (!found && cleanEmail === 'admin@tmi-erp.com' && (cleanPassword === 'Admin@2026!#' || cleanPassword === 'admin123')) {
@@ -696,6 +768,19 @@ export const useAppStore = create(
           return { success: true, user: found };
         }
 
+        if (!isSupabaseConfigured) {
+          return {
+            success: false,
+            error:
+              'This PC is NOT connected to the cloud database, so it cannot see users created on other PCs. Click "Connect to Cloud" below and enter the Supabase URL & Anon Key.',
+          };
+        }
+        if (authErrorMsg.toLowerCase().includes('not confirmed')) {
+          return {
+            success: false,
+            error: 'Email not confirmed in Supabase. Ask Admin to run supabase_setup.sql and re-save this user, or disable "Confirm email" in Supabase.',
+          };
+        }
         return { success: false, error: 'Invalid email or password credentials.' };
       },
 

@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { Lock, Mail, Eye, EyeOff, LogIn } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff, LogIn, Cloud, CloudOff } from 'lucide-react';
+import { isSupabaseConfigured } from '../../lib/supabase';
+import { CloudSetupModal } from '../common/CloudSetupModal';
 
 export const LoginForm = () => {
   const { login } = useAppStore();
+  const [cloudOpen, setCloudOpen] = useState(false);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -106,8 +109,27 @@ export const LoginForm = () => {
           <p className="text-center text-[11px] text-slate-400 pt-2">
             Contact your administrator if you don't have an account.
           </p>
+
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <span
+              className={`flex items-center space-x-1 text-[11px] font-semibold ${
+                isSupabaseConfigured ? 'text-emerald-600' : 'text-rose-600'
+              }`}
+            >
+              {isSupabaseConfigured ? <Cloud className="w-3.5 h-3.5" /> : <CloudOff className="w-3.5 h-3.5" />}
+              <span>{isSupabaseConfigured ? 'Connected to cloud' : 'This PC is not connected to cloud'}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setCloudOpen(true)}
+              className="text-[11px] font-bold text-brand-600 hover:text-brand-800 underline"
+            >
+              {isSupabaseConfigured ? 'Cloud Settings' : 'Connect to Cloud'}
+            </button>
+          </div>
         </div>
       </div>
+      <CloudSetupModal isOpen={cloudOpen} onClose={() => setCloudOpen(false)} />
     </div>
   );
 };
