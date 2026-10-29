@@ -64,6 +64,18 @@ export const clearSupabaseCredentials = () => {
   }
 };
 
+// Generate standard RFC4122 v4 UUID so Postgres id UUID never rejects it
+export const generateUUID = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
 // Create user from Admin Panel without logging out the currently active Admin
 export const createAdminUser = async (email, password, name, role, extra = {}) => {
   const config = getStoredConfig();
@@ -88,132 +100,142 @@ export const createAdminUser = async (email, password, name, role, extra = {}) =
     };
   }
 
+  const userDepartment =
+    extra.department ||
+    (role === 'Application Engineer'
+      ? 'Application Engineering'
+      : role === 'Sales Engineer'
+      ? 'Sales & Marketing'
+      : 'Executive Board');
+
+  let userId = null;
+  let authUser = null;
+
+  // 1. Method A: Try Database RPC admin_create_user (creates in auth.users directly with confirmed email!)
   try {
-    // Isolated client so Admin session is not replaced
-    const isolatedClient = createClient(config.url, config.key, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-        detectSessionInUrl: false,
-      },
+    const { data: rpcData, error: rpcError } = await supabase.rpc('admin_create_user', {
+      p_email: cleanEmail,
+      p_password: cleanPassword,
+      p_name: name || '',
+      p_role: role || 'Application Engineer',
+      p_department: userDepartment,
+      p_territory: extra.territory || 'Pan-India',
+      p_phone: extra.phone || '',
+      p_avatar: extra.avatar || '',
+      p_gender: extra.gender || 'Male',
     });
 
-    const userDepartment =
-      extra.department ||
-      (role === 'Application Engineer'
-        ? 'Application Engineering'
-        : role === 'Sales Engineer'
-        ? 'Sales & Marketing'
-        : 'Executive Board');
+    if (!rpcError && rpcData?.success && rpcData?.user_id) {
+      userId = rpcData.user_id;
+    }
+  } catch (rpcErr) {
+    console.debug('RPC admin_create_user notice:', rpcErr);
+  }
 
-    let userId = null;
-    let authUser = null;
-
-    // 1. Attempt to sign up the new user in Supabase Auth
-    const { data: signUpData, error: signUpError } = await isolatedClient.auth.signUp({
-      email: cleanEmail,
-      password: cleanPassword,
-      options: {
-        data: {
-          full_name: name,
-          role: role,
-          avatar_url: extra.avatar || '',
-          gender: extra.gender || 'Male',
-          department: userDepartment,
-          territory: extra.territory || 'Pan-India',
-          phone: extra.phone || '',
-          status: extra.status || 'Active',
+  // 2. Method B: Client-side Supabase Auth signUp if RPC was not executed
+  if (!userId) {
+    try {
+      // Isolated client so Admin session is not replaced
+      const isolatedClient = createClient(config.url, config.key, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
         },
-      },
-    });
+      });
 
-    if (signUpError) {
-      const msg = signUpError.message || '';
+      const { data: signUpData, error: signUpError } = await isolatedClient.auth.signUp({
+        email: cleanEmail,
+        password: cleanPassword,
+        options: {
+          data: {
+            full_name: name,
+            role: role,
+            avatar_url: extra.avatar || '',
+            gender: extra.gender || 'Male',
+            department: userDepartment,
+            territory: extra.territory || 'Pan-India',
+            phone: extra.phone || '',
+            status: extra.status || 'Active',
+          },
+        },
+      });
 
-      // If user was already registered in Supabase Auth before
-      if (
-        msg.toLowerCase().includes('already registered') ||
-        msg.toLowerCase().includes('already exists') ||
-        msg.toLowerCase().includes('unique')
-      ) {
-        // Try signing in to verify password and get user ID
-        try {
-          const { data: signInData } = await isolatedClient.auth.signInWithPassword({
-            email: cleanEmail,
-            password: cleanPassword,
-          });
-          if (signInData?.user?.id) {
-            userId = signInData.user.id;
-            authUser = signInData.user;
-          }
-        } catch (e) {}
-
-        if (!userId) {
-          // Query profiles table for existing user ID
+      if (!signUpError && signUpData?.user?.id) {
+        userId = signUpData.user.id;
+        authUser = signUpData.user;
+      } else if (signUpError) {
+        const msg = signUpError.message || '';
+        // If user already registered in Supabase Auth before, grab their user ID
+        if (
+          msg.toLowerCase().includes('already registered') ||
+          msg.toLowerCase().includes('already exists') ||
+          msg.toLowerCase().includes('unique')
+        ) {
           try {
-            const { data: pData } = await supabase
-              .from('profiles')
-              .select('id')
-              .eq('email', cleanEmail)
-              .single();
-            if (pData?.id) {
-              userId = pData.id;
+            const { data: signInData } = await isolatedClient.auth.signInWithPassword({
+              email: cleanEmail,
+              password: cleanPassword,
+            });
+            if (signInData?.user?.id) {
+              userId = signInData.user.id;
+              authUser = signInData.user;
             }
           } catch (e) {}
+
+          if (!userId) {
+            try {
+              const { data: pData } = await supabase
+                .from('profiles')
+                .select('id')
+                .eq('email', cleanEmail)
+                .single();
+              if (pData?.id) {
+                userId = pData.id;
+              }
+            } catch (e) {}
+          }
         }
-
-        userId = userId || `u-${Date.now()}`;
-      } else {
-        // For rate limit or any other auth error: fallback to database profile creation so admin can add unlimited users without interruption!
-        console.warn('Supabase Auth note (creating profile in database):', msg);
-        userId = userId || `u-${Date.now()}`;
       }
-    } else {
-      userId = signUpData?.user?.id;
-      authUser = signUpData?.user;
+    } catch (authErr) {
+      console.warn('Supabase Auth signUp note:', authErr);
     }
-
-    if (!userId) {
-      userId = `u-${Date.now()}`;
-    }
-
-    // 2. Upsert into `profiles` table
-    try {
-      const fullProfile = {
-        id: userId,
-        role: role,
-        name: name || '',
-        email: cleanEmail,
-        avatar: extra.avatar || '',
-        gender: extra.gender || 'Male',
-        department: userDepartment,
-        territory: extra.territory || 'Pan-India',
-        status: extra.status || 'Active',
-        phone: extra.phone || '',
-      };
-
-      const clientToUse = signUpData?.session ? isolatedClient : supabase;
-      const { error: fullErr } = await clientToUse.from('profiles').upsert(fullProfile);
-
-      if (fullErr) {
-        // Fallback: upsert basic profile if some columns do not exist in the database schema
-        console.warn('Full profile upsert notice, falling back to basic columns:', fullErr.message);
-        const basicProfile = {
-          id: userId,
-          email: cleanEmail,
-          name: name || '',
-          role: role,
-        };
-        await clientToUse.from('profiles').upsert(basicProfile);
-      }
-    } catch (profileErr) {
-      console.warn('Profile table upsert fallback notice:', profileErr);
-    }
-
-    return { success: true, user: authUser, userId };
-  } catch (err) {
-    return { success: false, error: err.message || 'Failed to create user in Supabase' };
   }
+
+  // Ensure userId is ALWAYS a valid RFC4122 UUID so Postgres id UUID column NEVER fails!
+  if (!userId) {
+    userId = generateUUID();
+  }
+
+  // 3. Upsert into `profiles` table in Supabase
+  try {
+    const fullProfile = {
+      id: userId,
+      role: role,
+      name: name || '',
+      email: cleanEmail,
+      password: cleanPassword,
+      avatar: extra.avatar || '',
+      gender: extra.gender || 'Male',
+      department: userDepartment,
+      territory: extra.territory || 'Pan-India',
+      status: extra.status || 'Active',
+      phone: extra.phone || '',
+    };
+
+    const { error: fullErr } = await supabase.from('profiles').upsert(fullProfile);
+
+    if (fullErr) {
+      // If password column does not exist yet in profiles schema, fallback to columns without password
+      const fallbackProfile = { ...fullProfile };
+      delete fallbackProfile.password;
+      await supabase.from('profiles').upsert(fallbackProfile);
+    }
+  } catch (profileErr) {
+    console.warn('Profile table upsert fallback notice:', profileErr);
+  }
+
+  return { success: true, user: authUser, userId };
 };
 
 // Helper: Sign in

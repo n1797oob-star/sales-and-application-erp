@@ -14,7 +14,7 @@ import {
   AVATAR_PRESETS,
 } from './seedData';
 import { ROLES, TASK_STATUSES, normalizeRole } from '../types';
-import { supabase, isSupabaseConfigured, createAdminUser } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, createAdminUser, generateUUID } from '../lib/supabase';
 
 // Helper to safely merge arrays by ID without losing records created across multiple devices,
 // while strictly filtering out any tombstone deletedIds so deleted items never resurrect.
@@ -54,7 +54,11 @@ const mergeUsersByEmail = (arrA = [], arrB = [], deletedSet = new Set()) => {
       const existing = emailMap.get(key);
       const betterID =
         existing.id && existing.id.length > 20 ? existing.id : (u.id && u.id.length > 20 ? u.id : existing.id || u.id);
-      emailMap.set(key, { ...existing, ...u, id: betterID, email: key });
+      const preservedPassword =
+        u.password && u.password !== 'password123'
+          ? u.password
+          : (existing.password || u.password || 'password123');
+      emailMap.set(key, { ...existing, ...u, id: betterID, email: key, password: preservedPassword });
     } else {
       emailMap.set(key, { ...u, email: key });
     }
@@ -465,17 +469,20 @@ export const useAppStore = create(
                 .filter((p) => !currentDeleted.has(p.id) && !currentDeleted.has((p.email || '').toLowerCase()))
                 .map((p) => {
                   const normRole = determineUserRole(p.email, null, p.role, null);
+                  const existingLocal = (state.users || []).find(
+                    (u) => String(u?.email || '').toLowerCase().trim() === (p.email || '').toLowerCase().trim()
+                  );
                   return {
                     id: p.id,
-                    name: p.name || 'User',
+                    name: p.name || existingLocal?.name || 'User',
                     email: (p.email || '').toLowerCase(),
                     role: normRole,
-                    avatar: p.avatar || AVATAR_PRESETS.Male[0],
-                    gender: p.gender || 'Male',
-                    department: getDepartmentForRole(normRole, p.department),
-                    territory: p.territory || 'Pan-India',
-                    status: p.status || 'Active',
-                    password: 'password123',
+                    avatar: p.avatar || existingLocal?.avatar || AVATAR_PRESETS.Male[0],
+                    gender: p.gender || existingLocal?.gender || 'Male',
+                    department: getDepartmentForRole(normRole, p.department || existingLocal?.department),
+                    territory: p.territory || existingLocal?.territory || 'Pan-India',
+                    status: p.status || existingLocal?.status || 'Active',
+                    password: p.password || existingLocal?.password || 'password123',
                   };
                 });
               // Deduplicate: merge local users with cloud profiles by email
@@ -545,8 +552,12 @@ export const useAppStore = create(
         const cleanEmail = (email || '').trim().toLowerCase();
         const cleanPassword = (password || '').trim();
 
-        // 1. Try Supabase Auth first if configured
+        // 1. Pre-sync from Supabase cloud so all devices get newly added users immediately
         if (isSupabaseConfigured) {
+          try {
+            await get().syncFromCloud();
+          } catch (e) {}
+
           try {
             // Sign out any other stale session first if different user
             const { data: sessData } = await supabase.auth.getSession();
@@ -792,7 +803,7 @@ export const useAppStore = create(
         }
 
         const newUser = {
-          id: supabaseUserId || `u-${Date.now()}`,
+          id: supabaseUserId || generateUUID(),
           password: userData.password || 'password123',
           avatar: userData.avatar || AVATAR_PRESETS.Male[0],
           status: 'Active',
@@ -866,8 +877,13 @@ export const useAppStore = create(
         if (targetEmail) deletedSet.add(targetEmail);
         const newDeletedIds = Array.from(deletedSet);
 
-        // Delete from Supabase profiles table
+        // Delete from Supabase profiles & auth.users tables
         if (isSupabaseConfigured) {
+          try {
+            // Try database RPC first to remove from auth.users as well
+            await supabase.rpc('admin_delete_user', { p_user_id: id });
+          } catch (e) {}
+
           try {
             await supabase.from('profiles').delete().eq('id', id);
             if (targetEmail) {
